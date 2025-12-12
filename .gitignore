@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.spec.bak
+venv/
+env/
+ENV/
+
+# PyInstaller
+*.manifest
+*.spec~
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+*.cache
+
+# Test videos and models (큰 파일 제외)
+*.mp4
+*.avi
+*.mov
+*.pt
+*.pth
+*.weights
+
+# User data
+uploads/
+outputs/
+cache/
+data/
+output_results/
+video_player_results/
+
+# Old files (Streamlit 등)
+yolo_dynamsoft.py
+img.py
+home.py
+pages/
