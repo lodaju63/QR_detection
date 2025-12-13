@@ -43,9 +43,13 @@ class MainActivity : AppCompatActivity() {
         previewView = findViewById(R.id.previewView)
         resultText = findViewById(R.id.resultText)
         roiBorder = findViewById(R.id.roiBorder)
+        debugText = findViewById(R.id.debugText)
         
         // ROI 영역 테두리 설정
         setupROIBorder()
+        
+        // 디버그 텍스트 표시 (개발 중)
+        debugText.visibility = android.view.View.VISIBLE
 
         // Python 초기화
         if (!Python.isStarted()) {
@@ -210,9 +214,9 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun calculateROIRect(): android.graphics.Rect? {
-        // ROI 영역 계산 (화면 중앙 80% 영역)
+        // ROI 영역 계산 (화면 중앙 50% 영역 - 반으로 줄임)
         return try {
-            val margin = 40 // dp를 픽셀로 변환 (대략)
+            val margin = 80 // dp를 픽셀로 변환 (40dp -> 80dp로 증가하여 영역을 반으로 줄임)
             val displayMetrics = resources.displayMetrics
             val marginPx = (margin * displayMetrics.density).toInt()
             
