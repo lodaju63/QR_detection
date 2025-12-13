@@ -25,7 +25,7 @@ version = 0.1
 # ✅ Dynamsoft REST API 버전: 순수 Python만 사용 (빌드 문제 없음!)
 # ✅ opencv-python-headless는 pip install용 (GitHub Actions)
 # ✅ buildozer에서는 opencv 레시피 사용
-requirements = python3,kivy==2.2.1,camera4kivy,opencv,numpy,pillow,android,jnius
+requirements = python3,kivy==2.2.1,opencv,numpy,pillow,android,jnius
 
 # (str) Supported orientation (one of landscape, sensorLandscape, portrait or all)
 orientation = portrait
@@ -61,10 +61,12 @@ android.archs = arm64-v8a, armeabi-v7a
 
 # (bool) enable AndroidX support. Enable when 'android.gradle_dependencies'
 # contains an 'androidx' package.
-android.enable_androidx = True
+# ⚠️ camera4kivy 제거로 인해 AndroidX 불필요 (기본 Kivy Camera 사용)
+android.enable_androidx = False
 
 # (list) Android Gradle dependencies
-android.gradle_dependencies = androidx.camera:camera-camera2:1.1.0, androidx.camera:camera-lifecycle:1.1.0, androidx.camera:camera-view:1.1.0
+# ⚠️ camera4kivy 제거로 인해 CameraX 의존성 불필요
+# android.gradle_dependencies = androidx.camera:camera-camera2:1.1.0, androidx.camera:camera-lifecycle:1.1.0, androidx.camera:camera-view:1.1.0
 
 # (bool) Enable android auto backup feature (Android API >=23)
 android.allow_backup = True
