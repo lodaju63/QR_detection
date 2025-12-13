@@ -1,8 +1,12 @@
 # Android QR Scanner Requirements
-kivy==2.1.0
+# ✅ 중요: opencv-python-headless 대신 opencv 레시피 사용
+# ✅ 중요: android, jnius 추가 (Camera4Kivy 필수)
+kivy==2.2.1
 camera4kivy>=0.1.0
-opencv-python-headless==4.9.0.80
+opencv
 numpy==1.24.3
+pillow
 pyzbar==0.1.9
 dynamsoft-barcode-reader-bundle>=11.0.0
-Pillow==10.2.0
+android
+jnius

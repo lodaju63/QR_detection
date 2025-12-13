@@ -16,7 +16,7 @@ source.dir = .
 source.main = android_qr_scanner.py
 
 # (list) Source files to include (let empty to include all the files)
-source.include_exts = py,png,jpg,kv,atlas
+source.include_exts = py,png,jpg,kv,atlas,txt
 
 # (list) List of inclusions using pattern matching
 #source.include_patterns = assets/*,images/*.png
@@ -38,8 +38,9 @@ version = 0.1
 # version.filename = %(source.dir)s/main.py
 
 # (list) Application requirements
-# comma separated e.g. requirements = sqlite3,kivy
-requirements = python3,kivy==2.1.0,camera4kivy,opencv-python-headless,numpy,pyzbar,dynamsoft-barcode-reader-bundle
+# ✅ 중요: opencv-python-headless 대신 opencv 레시피 사용
+# ✅ 중요: android, jnius 추가
+requirements = python3,kivy==2.2.1,camera4kivy,opencv,numpy,pillow,pyzbar,dynamsoft-barcode-reader-bundle,android,jnius
 
 # (str) Custom source folders for requirements
 #requirements.source.kivy = ../../kivy
@@ -106,7 +107,12 @@ android.archs = arm64-v8a, armeabi-v7a
 
 # (bool) enable AndroidX support. Enable when 'android.gradle_dependencies'
 # contains an 'androidx' package.
-android.enable_androidx = False
+# ✅ 중요: Camera4Kivy를 위해 반드시 True여야 함
+android.enable_androidx = True
+
+# (list) Android Gradle dependencies
+# ✅ 중요: Camera4Kivy 구동을 위한 필수 의존성
+android.gradle_dependencies = androidx.camera:camera-camera2:1.1.0, androidx.camera:camera-lifecycle:1.1.0, androidx.camera:camera-view:1.1.0
 
 # (bool) Enable android auto backup feature (Android API >=23)
 android.allow_backup = True
