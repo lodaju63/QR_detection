@@ -40,24 +40,29 @@
         app:layout_constraintWidth_default="percent"
         app:layout_constraintWidth_percent="0.7" />
     
-    <!-- 해독 결과 표시용 오버레이 (하단에 고정) -->
-    <TextView
-        android:id="@+id/debugText"
+    <!-- 해독 결과 표시용 오버레이 (하단에 고정, 스크롤 가능) -->
+    <ScrollView
+        android:id="@+id/debugScrollView"
         android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:text=""
-        android:textSize="16sp"
-        android:textColor="@android:color/white"
+        android:layout_height="180dp"
         android:background="#CC000000"
-        android:padding="12dp"
-        android:visibility="visible"
-        android:maxLines="5"
-        android:scrollbars="vertical"
+        android:fillViewport="true"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         android:layout_marginBottom="16dp"
         android:layout_marginStart="16dp"
-        android:layout_marginEnd="16dp" />
+        android:layout_marginEnd="16dp">
+        <TextView
+            android:id="@+id/debugText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textSize="14sp"
+            android:textColor="@android:color/white"
+            android:padding="12dp"
+            android:visibility="visible"
+            android:fontFamily="monospace" />
+    </ScrollView>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

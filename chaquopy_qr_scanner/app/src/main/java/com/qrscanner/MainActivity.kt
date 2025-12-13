@@ -33,8 +33,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var resultText: TextView
     private lateinit var roiBorder: View
     private lateinit var debugText: TextView
+    private lateinit var debugScrollView: android.widget.ScrollView
     private var decodeAttemptCount = 0
     private var lastDecodeTime = 0L
+    private val logHistory = mutableListOf<String>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -71,7 +73,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Dynamsoft 초기화 (9.x 버전: 정적 메서드 사용)
-        BarcodeReader.initLicense("t0085YQEAADYdcL2llMa8vH1Rtnun+43saE/kdAE7ZbIxMQGRMtSzVSZRI8vfOK4Ids52rjekwzh87yABFLraXw5Va1BV7NnBjI8m7qbw3kxOprI75ExJpw==", object : DBRLicenseVerificationListener {
+        val licenseKey = "t0085YQEAADYdcL2llMa8vH1Rtnun+43saE/kdAE7ZbIxMQGRMtSzVSZRI8vfOK4Ids52rjekwzh87yABFLraXw5Va1BV7NnBjI8m7qbw3kxOprI75ExJpw=="
+        android.util.Log.d("MainActivity", "Dynamsoft 라이선스 초기화 시작...")
+        android.util.Log.d("MainActivity", "라이선스 키 길이: ${licenseKey.length}")
+        BarcodeReader.initLicense(licenseKey, object : DBRLicenseVerificationListener {
             override fun DBRLicenseVerificationCallback(isSuccess: Boolean, error: Exception?) {
                 runOnUiThread {
                     if (isSuccess) {
