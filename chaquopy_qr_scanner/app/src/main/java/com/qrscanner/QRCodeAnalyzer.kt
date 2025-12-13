@@ -16,7 +16,8 @@ import java.nio.ByteBuffer
 class QRCodeAnalyzer(
     private val barcodeReader: BarcodeReader?,
     private val python: Python?,
-    private val onResult: (String) -> Unit
+    private val onResult: (String) -> Unit,
+    private val roiRect: android.graphics.Rect? = null
 ) : ImageAnalysis.Analyzer {
 
     override fun analyze(imageProxy: ImageProxy) {
@@ -32,6 +33,7 @@ class QRCodeAnalyzer(
                         if (results != null && results.isNotEmpty()) {
                             for (result in results) {
                                 val text = result.barcodeText
+                                android.util.Log.d("QRCodeAnalyzer", "Found barcode: $text")
                                 if (text != null && text.isNotEmpty()) {
                                     onResult(text)
                                     imageProxy.close()
