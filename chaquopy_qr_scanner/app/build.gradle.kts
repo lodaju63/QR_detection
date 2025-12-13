@@ -1,9 +1,8 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("com.chaquo.python")
 }
-
-apply(plugin = "com.chaquo.python")
 
 android {
     namespace = "com.qrscanner"
@@ -19,16 +18,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
         ndk {
+            // ABI 필터 설정
             abiFilters += listOf("armeabi-v7a", "arm64-v8a")
-        }
-        
-        python {
-            version("3.10")
-            pip {
-                install("opencv-python-headless==4.9.0.80")
-                install("numpy")
-                install("pillow")
-            }
         }
     }
 
@@ -49,6 +40,18 @@ android {
     
     kotlinOptions {
         jvmTarget = "1.8"
+    }
+}
+
+// ✅ [핵심 수정] Kotlin DSL에서는 chaquopy 블록을 android 블록 밖(최상위)에 작성해야 합니다.
+chaquopy {
+    defaultConfig {
+        version = "3.10"
+        pip {
+            install("opencv-python-headless==4.9.0.80")
+            install("numpy")
+            install("pillow")
+        }
     }
 }
 
