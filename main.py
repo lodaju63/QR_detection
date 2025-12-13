@@ -36,7 +36,7 @@ import cv2
 import numpy as np
 import time
 import queue
-from collections import defaultdict, deque
+from collections import deque
 from datetime import datetime
 from typing import Optional, List, Dict, Tuple
 
@@ -48,7 +48,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox, QStyleOptionSlider, QDoubleSpinBox, QSpinBox, QInputDialog
 )
 from PyQt6.QtCore import (
-    QThread, pyqtSignal, Qt, QTimer, QSize, QObject, QMutex, QMutexLocker
+    QThread, pyqtSignal, Qt, QTimer, QObject, QMutex, QMutexLocker
 )
 from PyQt6.QtGui import QImage, QPixmap, QFont
 
@@ -465,9 +465,7 @@ class AnalysisWorker(QThread):
                 # 6. 결과 전송
                 self.result_ready.emit(frame_idx, detections, metrics)
             except Exception as e:
-                print(f"[AnalysisWorker] 분석 오류: {e}")
-                import traceback
-                traceback.print_exc()
+                pass
 
             # 큐 작업 완료 알림
             self.input_queue.task_done()
@@ -829,8 +827,6 @@ class VideoPlayThread(QThread):
 
         except Exception as e:
             self.error_occurred.emit(f"재생 중 오류 발생: {str(e)}")
-            import traceback
-            traceback.print_exc()
         finally:
             if cap:
                 cap.release()
@@ -1100,30 +1096,21 @@ class VideoProcessorWorker(QThread):
         
     def run(self):
         """메인 처리 루프 (별도 스레드에서 실행)"""
-        print(">>> Worker thread RUN started!")  # 디버그
         try:
             if not self.video_path or not os.path.exists(self.video_path):
-                print(f">>> ERROR: Video path not found: {self.video_path}")  # 디버그
                 self.error_occurred.emit("비디오 파일을 찾을 수 없습니다.")
                 return
                 
             if self.yolo_model is None:
-                print(">>> ERROR: YOLO model is None!")  # 디버그
                 self.error_occurred.emit("YOLO 모델이 로드되지 않았습니다.")
                 return
             
-            print(f">>> Opening video: {self.video_path}")  # 디버그
             # 비디오 열기
             cap = cv2.VideoCapture(self.video_path)
-            print(f">>> Video opened: {cap.isOpened()}")  # 디버그
             if not cap.isOpened():
-                print(">>> ERROR: Cannot open video!")  # 디버그
                 self.error_occurred.emit("비디오 파일을 열 수 없습니다.")
                 return
         except Exception as e:
-            print(f">>> EXCEPTION in worker setup: {e}")  # 디버그
-            import traceback
-            traceback.print_exc()
             self.error_occurred.emit(f"Worker 초기화 오류: {e}")
             return
         
@@ -1214,7 +1201,8 @@ class VideoProcessorWorker(QThread):
         except Exception as e:
             self.error_occurred.emit(f"처리 중 오류 발생: {str(e)}")
         finally:
-            cap.release()
+            if cap:
+                cap.release()
             self.finished.emit()
     
     def _apply_preprocessing(self, frame: np.ndarray) -> np.ndarray:
@@ -1288,20 +1276,14 @@ class VideoProcessorWorker(QThread):
     def _decode_qr_code(self, frame: np.ndarray, detection: Dict):
         """Dynamsoft로 QR 코드 해독"""
         if self.dbr_reader is None:
-            print(f">>> [DECODE] ERROR: dbr_reader is None!")  # 디버그
             return
             
         try:
-            print(f">>> [DECODE] Starting decode for bbox: {detection.get('bbox', 'no bbox')}")  # 디버그
-            
             x1, y1, x2, y2 = detection['bbox']
             roi = frame[y1:y2, x1:x2]
             
             if roi.size == 0:
-                print(f">>> [DECODE] ERROR: ROI is empty!")  # 디버그
                 return
-            
-            print(f">>> [DECODE] ROI shape: {roi.shape}, dtype: {roi.dtype}")  # 디버그
             
             # RGB 변환
             if len(roi.shape) == 3 and roi.shape[2] == 3:
@@ -1309,12 +1291,8 @@ class VideoProcessorWorker(QThread):
             else:
                 rgb_image = cv2.cvtColor(roi, cv2.COLOR_GRAY2RGB)
             
-            print(f">>> [DECODE] RGB image shape: {rgb_image.shape}, dtype: {rgb_image.dtype}")  # 디버그
-            
             # Dynamsoft 해독
-            print(f">>> [DECODE] Calling capture()...")  # 디버그
             captured_result = self.dbr_reader.capture(rgb_image, dbr.EnumImagePixelFormat.IPF_RGB_888)
-            print(f">>> [DECODE] Capture returned: {captured_result}")  # 디버그
             
             # 방법 1: get_decoded_barcodes_result() 시도
             barcode_result = None
@@ -1322,28 +1300,21 @@ class VideoProcessorWorker(QThread):
             
             if hasattr(captured_result, 'get_decoded_barcodes_result'):
                 barcode_result = captured_result.get_decoded_barcodes_result()
-                print(f">>> [DECODE] get_decoded_barcodes_result(): {barcode_result}")  # 디버그
-                
                 if barcode_result:
                     items = barcode_result.get_items() if hasattr(barcode_result, 'get_items') else None
             
             # 방법 2: 직접 items 속성 접근 시도
             if not items and hasattr(captured_result, 'items'):
                 items = captured_result.items
-                print(f">>> [DECODE] Direct items access: {items}")  # 디버그
             
             # 방법 3: decoded_barcodes_result 속성 시도
             if not items and hasattr(captured_result, 'decoded_barcodes_result'):
                 barcode_result = captured_result.decoded_barcodes_result
-                print(f">>> [DECODE] decoded_barcodes_result property: {barcode_result}")  # 디버그
                 if barcode_result:
                     items = barcode_result.items if hasattr(barcode_result, 'items') else None
             
-            print(f">>> [DECODE] Final items: {items}, count: {len(items) if items else 0}")  # 디버그
-            
             if items and len(items) > 0:
                 barcode_item = items[0]
-                print(f">>> [DECODE] Barcode item: {barcode_item}")  # 디버그
                 
                 # 텍스트 추출
                 text = None
@@ -1351,8 +1322,6 @@ class VideoProcessorWorker(QThread):
                     text = barcode_item.get_text()
                 elif hasattr(barcode_item, 'text'):
                     text = barcode_item.text
-                
-                print(f">>> [DECODE] Extracted text: {text}")  # 디버그
                 
                 # Quad 좌표 추출
                 quad_xy = None
@@ -1369,17 +1338,11 @@ class VideoProcessorWorker(QThread):
                 detection['text'] = text or ''
                 detection['quad'] = quad_xy
                 detection['success'] = len(detection['text']) > 0
-                
-                print(f">>> [DECODE] SUCCESS! Text: '{text}', Success: {detection['success']}")  # 디버그
             else:
-                print(f">>> [DECODE] FAIL: No items found")  # 디버그
                 detection['text'] = ''
                 detection['success'] = False
                     
         except Exception as e:
-            print(f">>> [DECODE] EXCEPTION: {e}")  # 디버그
-            import traceback
-            traceback.print_exc()
             detection['text'] = ''
             detection['success'] = False
     
@@ -1447,6 +1410,394 @@ class VideoProcessorWorker(QThread):
 
 
 # ============================================================================
+# 웹캠 모드 전용 창
+# ============================================================================
+
+class WebcamAIWorker(QThread):
+    """웹캠용 AI 워커 (base.py의 AIWorker와 유사)"""
+    result_ready = pyqtSignal(list)  # 결과 전송 시그널
+
+    def __init__(self, frame_queue, yolo_model, dbr_reader, conf_threshold=0.25):
+        super().__init__()
+        self.frame_queue = frame_queue
+        self.running = True
+        self.conf_threshold = conf_threshold
+        self.yolo_model = yolo_model
+        self.dbr_reader = dbr_reader
+
+    def run(self):
+        while self.running:
+            try:
+                frame = self.frame_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+
+            results = []
+            
+            # YOLO 탐지
+            detections = []
+            if self.yolo_model is not None:
+                try:
+                    yolo_results = self.yolo_model(frame, conf=self.conf_threshold, verbose=False)
+                    result = yolo_results[0]
+                    
+                    if result.boxes is not None and len(result.boxes) > 0:
+                        h, w = frame.shape[:2]
+                        for box in result.boxes:
+                            conf = float(box.conf[0])
+                            xyxy = box.xyxy[0].cpu().numpy()
+                            x1, y1, x2, y2 = map(int, xyxy)
+                            
+                            pad = 20
+                            x1 = max(0, x1 - pad)
+                            y1 = max(0, y1 - pad)
+                            x2 = min(w, x2 + pad)
+                            y2 = min(h, y2 + pad)
+                            
+                            detections.append({
+                                'bbox': [x1, y1, x2, y2],
+                                'confidence': conf
+                            })
+                except Exception as e:
+                    pass
+            
+            # Dynamsoft 해독
+            if self.dbr_reader is not None and len(detections) > 0:
+                for det in detections:
+                    x1, y1, x2, y2 = det['bbox']
+                    roi = frame[y1:y2, x1:x2]
+                    
+                    if roi.size == 0:
+                        continue
+                    
+                    if len(roi.shape) == 3 and roi.shape[2] == 3:
+                        rgb_image = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
+                    else:
+                        rgb_image = cv2.cvtColor(roi, cv2.COLOR_GRAY2RGB)
+                    
+                    try:
+                        captured_result = self.dbr_reader.capture(rgb_image, dbr.EnumImagePixelFormat.IPF_RGB_888)
+                        
+                        barcode_result = None
+                        items = None
+                        
+                        if hasattr(captured_result, 'get_decoded_barcodes_result'):
+                            barcode_result = captured_result.get_decoded_barcodes_result()
+                            if barcode_result:
+                                items = barcode_result.get_items() if hasattr(barcode_result, 'get_items') else None
+                        
+                        if not items and hasattr(captured_result, 'items'):
+                            items = captured_result.items
+                        
+                        if not items and hasattr(captured_result, 'decoded_barcodes_result'):
+                            barcode_result = captured_result.decoded_barcodes_result
+                            if barcode_result:
+                                items = barcode_result.items if hasattr(barcode_result, 'items') else None
+                        
+                        decoded_text = ""
+                        if items and len(items) > 0:
+                            barcode_item = items[0]
+                            
+                            if hasattr(barcode_item, 'get_text'):
+                                try:
+                                    decoded_text = barcode_item.get_text()
+                                except:
+                                    pass
+                            
+                            if not decoded_text and hasattr(barcode_item, 'text'):
+                                try:
+                                    decoded_text = barcode_item.text
+                                except:
+                                    pass
+                            
+                            if not decoded_text and hasattr(barcode_item, 'getBarcodeText'):
+                                try:
+                                    decoded_text = barcode_item.getBarcodeText()
+                                except:
+                                    pass
+                        
+                        if decoded_text:
+                            results.append([x1, y1, x2, y2, str(decoded_text)])
+                        else:
+                            results.append([x1, y1, x2, y2, ""])
+                            
+                    except Exception as e:
+                        results.append([x1, y1, x2, y2, ""])
+            elif len(detections) > 0:
+                for det in detections:
+                    x1, y1, x2, y2 = det['bbox']
+                    results.append([x1, y1, x2, y2, ""])
+
+            self.result_ready.emit(results)
+            self.frame_queue.task_done()
+
+    def stop(self):
+        self.running = False
+        self.wait()
+
+
+class WebcamVideoPlayer(QThread):
+    """웹캠용 비디오 플레이어 (base.py의 VideoPlayer와 유사)"""
+    change_pixmap_signal = pyqtSignal(np.ndarray)
+
+    def __init__(self, frame_queue):
+        super().__init__()
+        self.frame_queue = frame_queue
+        self.running = True
+        self.latest_ai_results = []
+
+    def update_ai_results(self, results):
+        """AI 워커가 결과를 보내면 여기서 업데이트"""
+        self.latest_ai_results = results
+
+    def run(self):
+        cap = cv2.VideoCapture(0)  # 웹캠 모드
+        
+        fps = 30
+        frame_interval = 1.0 / fps
+
+        while self.running and cap.isOpened():
+            start_time = time.time()
+            
+            ret, frame = cap.read()
+            if not ret:
+                time.sleep(0.01)
+                continue
+
+            # AI에게 일감 던지기
+            if self.frame_queue.empty():
+                self.frame_queue.put(frame.copy())
+
+            # 시각화
+            for res in self.latest_ai_results:
+                x1, y1, x2, y2, text = res
+                color = (0, 255, 0) if text else (0, 0, 255)
+                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
+                if text:
+                    cv2.putText(frame, text[:30], (int(x1), int(y1)-10), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
+            # UI로 전송
+            self.change_pixmap_signal.emit(frame)
+
+            # FPS 유지
+            processing_time = time.time() - start_time
+            delay = max(0, frame_interval - processing_time)
+            time.sleep(delay)
+
+        cap.release()
+
+    def stop(self):
+        self.running = False
+        self.wait()
+
+
+class WebcamWindow(QMainWindow):
+    """웹캠 모드 전용 창"""
+    
+    def __init__(self, yolo_model, dbr_reader):
+        super().__init__()
+        self.setWindowTitle("웹캠 QR 분석")
+        self.resize(1280, 900)
+
+        # 로그 관련 변수
+        self.frame_counter = 0
+        self.log_filter_mode = 'all'  # 'all', 'success', 'fail'
+        self.all_log_entries = []  # 모든 로그 항목 저장 (필터링용)
+
+        # UI 구성
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+        self.layout = QVBoxLayout(self.central_widget)
+
+        # 비디오 레이블
+        self.video_label = QLabel("웹캠 연결 중...")
+        self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.video_label.setMinimumSize(640, 480)
+        self.video_label.setStyleSheet("QLabel { background-color: black; }")
+        self.layout.addWidget(self.video_label)
+
+        # 로그 섹션
+        log_group = QGroupBox("📋 데이터 로그")
+        log_layout = QVBoxLayout(log_group)
+        
+        # 로그 필터 버튼
+        log_filter_layout = QHBoxLayout()
+        self.btn_log_all = QPushButton("전체")
+        self.btn_log_all.setCheckable(True)
+        self.btn_log_all.setChecked(True)
+        self.btn_log_all.clicked.connect(lambda: self.set_log_filter('all'))
+        
+        self.btn_log_success = QPushButton("성공만")
+        self.btn_log_success.setCheckable(True)
+        self.btn_log_success.clicked.connect(lambda: self.set_log_filter('success'))
+        
+        self.btn_log_fail = QPushButton("실패만")
+        self.btn_log_fail.setCheckable(True)
+        self.btn_log_fail.clicked.connect(lambda: self.set_log_filter('fail'))
+        
+        log_filter_layout.addWidget(self.btn_log_all)
+        log_filter_layout.addWidget(self.btn_log_success)
+        log_filter_layout.addWidget(self.btn_log_fail)
+        log_filter_layout.addStretch()
+        
+        log_layout.addLayout(log_filter_layout)
+        
+        # 로그 테이블
+        self.log_table = QTableWidget()
+        self.log_table.setColumnCount(4)
+        self.log_table.setHorizontalHeaderLabels(["Timestamp", "Frame No", "Decoded Data", "Status"])
+        self.log_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.log_table.setAlternatingRowColors(True)
+        self.log_table.setMinimumHeight(200)
+        self.log_table.setMaximumHeight(200)
+        
+        log_layout.addWidget(self.log_table)
+        self.layout.addWidget(log_group)
+
+        # 큐 생성
+        self.frame_queue = queue.Queue(maxsize=1)
+
+        # 스레드 생성
+        self.ai_worker = WebcamAIWorker(self.frame_queue, yolo_model, dbr_reader)
+        self.player = WebcamVideoPlayer(self.frame_queue)
+
+        # 시그널 연결
+        self.player.change_pixmap_signal.connect(self.update_image)
+        self.ai_worker.result_ready.connect(self.on_ai_result)
+        # 플레이어에도 결과 전달 (시각화용)
+        self.ai_worker.result_ready.connect(self.player.update_ai_results)
+
+        # 시작
+        self.ai_worker.start()
+        self.player.start()
+    
+    def on_ai_result(self, results):
+        """AI 결과 처리 및 로그 추가"""
+        self.frame_counter += 1
+        self.player.update_ai_results(results)
+        
+        # 결과를 로그에 추가
+        if results:
+            for res in results:
+                x1, y1, x2, y2, text = res
+                if text:
+                    self._add_log_entry(self.frame_counter, text, "✅ 성공")
+                else:
+                    self._add_log_entry(self.frame_counter, "인식 실패", "❌ 실패")
+    
+    def set_log_filter(self, mode: str):
+        """로그 필터 설정"""
+        self.log_filter_mode = mode
+        self.btn_log_all.setChecked(mode == 'all')
+        self.btn_log_success.setChecked(mode == 'success')
+        self.btn_log_fail.setChecked(mode == 'fail')
+        self._refresh_log_table()
+    
+    def _refresh_log_table(self):
+        """로그 테이블 새로고침 (필터 적용)"""
+        self.log_table.setRowCount(0)
+        
+        for entry in self.all_log_entries:
+            should_show = False
+            if self.log_filter_mode == 'all':
+                should_show = True
+            elif self.log_filter_mode == 'success' and entry['is_success']:
+                should_show = True
+            elif self.log_filter_mode == 'fail' and not entry['is_success']:
+                should_show = True
+            
+            if should_show:
+                row_count = self.log_table.rowCount()
+                self.log_table.insertRow(row_count)
+                
+                self.log_table.setItem(row_count, 0, QTableWidgetItem(entry['timestamp']))
+                self.log_table.setItem(row_count, 1, QTableWidgetItem(str(entry['frame_no'])))
+                self.log_table.setItem(row_count, 2, QTableWidgetItem(entry['decoded_data'][:50]))
+                self.log_table.setItem(row_count, 3, QTableWidgetItem(entry['status']))
+        
+        self.log_table.scrollToBottom()
+    
+    def _add_log_entry(self, frame_no: int, decoded_data: str, status: str):
+        """로그 테이블에 항목 추가"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        
+        # 모든 로그 항목을 저장
+        log_entry = {
+            'timestamp': timestamp,
+            'frame_no': frame_no,
+            'decoded_data': decoded_data,
+            'status': status,
+            'is_success': '✅' in status
+        }
+        self.all_log_entries.append(log_entry)
+        
+        # 최대 1000개 항목 유지
+        if len(self.all_log_entries) > 1000:
+            self.all_log_entries.pop(0)
+        
+        # 현재 필터에 맞는 항목만 테이블에 추가
+        should_show = False
+        if self.log_filter_mode == 'all':
+            should_show = True
+        elif self.log_filter_mode == 'success' and log_entry['is_success']:
+            should_show = True
+        elif self.log_filter_mode == 'fail' and not log_entry['is_success']:
+            should_show = True
+        
+        if should_show:
+            row_count = self.log_table.rowCount()
+            self.log_table.insertRow(row_count)
+            
+            self.log_table.setItem(row_count, 0, QTableWidgetItem(timestamp))
+            self.log_table.setItem(row_count, 1, QTableWidgetItem(str(frame_no)))
+            self.log_table.setItem(row_count, 2, QTableWidgetItem(decoded_data[:50]))
+            self.log_table.setItem(row_count, 3, QTableWidgetItem(status))
+            
+            # 자동 스크롤
+            self.log_table.scrollToBottom()
+            
+            # 최대 1000개 행 유지
+            if self.log_table.rowCount() > 1000:
+                self.log_table.removeRow(0)
+
+    def update_image(self, cv_img):
+        """OpenCV 이미지를 PyQt 이미지로 변환하여 표시"""
+        qt_img = self.convert_cv_qt(cv_img)
+        self.video_label.setPixmap(qt_img)
+
+    def convert_cv_qt(self, cv_img):
+        """Convert from an opencv image to QPixmap"""
+        rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb_image.shape
+        bytes_per_line = ch * w
+        convert_to_Qt_format = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+        
+        label_width = self.video_label.width()
+        label_height = self.video_label.height()
+        
+        if label_width > 0 and label_height > 0:
+            scaled_image = convert_to_Qt_format.scaled(
+                label_width, label_height, 
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            p = QPixmap.fromImage(scaled_image)
+        else:
+            p = QPixmap.fromImage(convert_to_Qt_format)
+        
+        return p
+
+    def closeEvent(self, event):
+        self.player.stop()
+        self.ai_worker.stop()
+        # 메인 윈도우의 참조 정리
+        if hasattr(self, 'parent_window') and self.parent_window:
+            self.parent_window.webcam_window = None
+        event.accept()
+
+
+# ============================================================================
 # 메인 윈도우 클래스
 # ============================================================================
 
@@ -1462,7 +1813,8 @@ class QRAnalysisMainWindow(QMainWindow):
         self.video_path = None
         self.worker = None
         self.preprocessing_options = {}
-        self.processing_mode = 'sync'  # 'sync' 또는 'async'
+        self.processing_mode = 'sync'  # 'sync', 'async', 또는 'webcam'
+        self.webcam_window = None  # 웹캠 창 참조
         # 데이터 버퍼 (실시간 그래프용)
         self.frame_indices = deque(maxlen=500)  # 최근 500 프레임
         self.success_history = deque(maxlen=500)
@@ -1608,8 +1960,14 @@ class QRAnalysisMainWindow(QMainWindow):
         self.btn_mode_async.setMaximumWidth(60)
         self.btn_mode_async.clicked.connect(lambda: self.set_processing_mode('async'))
         
+        self.btn_mode_webcam = QPushButton("웹캠")
+        self.btn_mode_webcam.setCheckable(True)
+        self.btn_mode_webcam.setMaximumWidth(60)
+        self.btn_mode_webcam.clicked.connect(lambda: self.set_processing_mode('webcam'))
+        
         filter_layout.addWidget(self.btn_mode_sync)
         filter_layout.addWidget(self.btn_mode_async)
+        filter_layout.addWidget(self.btn_mode_webcam)
         filter_layout.addStretch()
         
         content_layout.addLayout(filter_layout)
@@ -1623,7 +1981,7 @@ class QRAnalysisMainWindow(QMainWindow):
         self.btn_start = QPushButton("▶️ 시작")
         self.btn_start.setMinimumHeight(40)
         self.btn_start.setEnabled(False)
-        self.btn_start.clicked.connect(self._debug_start_processing)
+        self.btn_start.clicked.connect(self.start_processing)
         
         self.btn_pause = QPushButton("⏸️ 일시정지")
         self.btn_pause.setMinimumHeight(40)
@@ -2357,32 +2715,11 @@ class QRAnalysisMainWindow(QMainWindow):
             self.graphs_group.show()
             self.btn_graphs.setChecked(True)
     
-    def _debug_start_processing(self):
-        """디버그용 시작 처리 래퍼"""
-        print("\n" + "="*60)
-        print("=== BUTTON CLICKED ===")
-        print("="*60)
-        import traceback
-        traceback.print_stack()
-        print("="*60 + "\n")
-        self.start_processing()
-    
     def start_processing(self):
         """영상 처리 시작"""
-        print("\n" + "="*60)
-        print("=== START PROCESSING CALLED ===")
-        print("="*60)
-        
         if not self.yolo_model or not self.video_path:
-            print(">>> ERROR: Model or video not loaded!")
             QMessageBox.warning(self, "경고", "모델과 영상을 먼저 로드하세요.")
             return
-        
-        print(f">>> Model: {self.yolo_model}")
-        print(f">>> Video: {self.video_path}")
-        print(f">>> DBR Reader: {self.dbr_reader}")
-        print(f">>> Processing Mode: {self.processing_mode}")
-        print(">>> Initializing data...")
         
         # 데이터 초기화
         self.frame_indices.clear()
@@ -2399,7 +2736,6 @@ class QRAnalysisMainWindow(QMainWindow):
 
         # 모드에 따라 다른 Worker 사용
         if self.processing_mode == 'async':
-            print("Creating VideoManager (비동기 모드)...")
             self.worker = VideoManager(self.yolo_model, self.dbr_reader)
             
             # 시그널 연결
@@ -2416,9 +2752,7 @@ class QRAnalysisMainWindow(QMainWindow):
                 conf_threshold=0.25,
                 frame_interval=self.frame_interval_spin.value()
             )
-            print("Async processing started! 🚀")
         else:
-            print("Creating VideoProcessorWorker (동기 모드)...")
             self.worker = VideoProcessorWorker()
             self.worker.set_video(self.video_path)
             self.worker.set_model(self.yolo_model, self.dbr_reader)
@@ -2428,9 +2762,7 @@ class QRAnalysisMainWindow(QMainWindow):
             self.worker.timeline_updated.connect(self.on_timeline_updated)
             self.worker.finished.connect(self.on_processing_finished)
             self.worker.error_occurred.connect(self.on_error)
-            print("Starting worker thread...")
             self.worker.start()
-            print("Worker thread started!")
         
         self.btn_start.setEnabled(False)
         self.btn_pause.setEnabled(True)
@@ -2487,6 +2819,12 @@ class QRAnalysisMainWindow(QMainWindow):
 
     def set_processing_mode(self, mode: str):
         """처리 모드 설정"""
+        # 웹캠 모드인 경우 새로운 창 열기
+        if mode == 'webcam':
+            self._open_webcam_window()
+            # 버튼 상태는 웹캠 모드로 설정하지 않음 (별도 창이므로)
+            return
+        
         # 처리 중인지 확인
         if self.worker:
             is_running = getattr(self.worker, 'is_running', False) or (hasattr(self.worker, 'isRunning') and self.worker.isRunning())
@@ -2496,9 +2834,11 @@ class QRAnalysisMainWindow(QMainWindow):
                 if self.processing_mode == 'sync':
                     self.btn_mode_sync.setChecked(True)
                     self.btn_mode_async.setChecked(False)
-                else:
+                    self.btn_mode_webcam.setChecked(False)
+                elif self.processing_mode == 'async':
                     self.btn_mode_sync.setChecked(False)
                     self.btn_mode_async.setChecked(True)
+                    self.btn_mode_webcam.setChecked(False)
                 return
         
         # 모드 변경 확인
@@ -2516,17 +2856,42 @@ class QRAnalysisMainWindow(QMainWindow):
             if mode == 'sync':
                 self.btn_mode_sync.setChecked(True)
                 self.btn_mode_async.setChecked(False)
+                self.btn_mode_webcam.setChecked(False)
             else:
                 self.btn_mode_sync.setChecked(False)
                 self.btn_mode_async.setChecked(True)
+                self.btn_mode_webcam.setChecked(False)
         else:
             # 변경 취소 - 이전 모드로 버튼 상태 복원
             if self.processing_mode == 'sync':
                 self.btn_mode_sync.setChecked(True)
                 self.btn_mode_async.setChecked(False)
-            else:
+                self.btn_mode_webcam.setChecked(False)
+            elif self.processing_mode == 'async':
                 self.btn_mode_sync.setChecked(False)
                 self.btn_mode_async.setChecked(True)
+                self.btn_mode_webcam.setChecked(False)
+    
+    def _open_webcam_window(self):
+        """웹캠 모드 창 열기"""
+        # 이미 열려있으면 포커스만 이동
+        if self.webcam_window and self.webcam_window.isVisible():
+            self.webcam_window.raise_()
+            self.webcam_window.activateWindow()
+            return
+        
+        # 모델이 로드되어 있는지 확인
+        if not self.yolo_model:
+            QMessageBox.warning(self, "경고", "먼저 YOLO 모델을 로드하세요.")
+            self.btn_mode_webcam.setChecked(False)
+            return
+        
+        # 웹캠 창 생성 및 표시
+        self.webcam_window = WebcamWindow(self.yolo_model, self.dbr_reader)
+        self.webcam_window.parent_window = self  # 참조 저장
+        self.webcam_window.show()
+        # 웹캠 모드는 별도 창이므로 버튼 체크 해제
+        self.btn_mode_webcam.setChecked(False)
         
     def on_processing_finished(self):
         """처리 완료"""
@@ -2590,12 +2955,9 @@ class QRAnalysisMainWindow(QMainWindow):
                            detections: List[Dict], metrics: Dict):
         """프레임 처리 완료 시 호출 (시그널 핸들러)"""
         try:
-            print(f">>> Frame processed! Frame: {metrics.get('frame_no', '?')}, QRs: {len(detections)}")  # 디버그
             self.on_frame_processed(original_frame, preprocessed_frame, detections, metrics)
         except Exception as e:
-            print(f">>> EXCEPTION in _on_frame_processed: {e}")  # 디버그
-            import traceback
-            traceback.print_exc()
+            pass
     
     def on_frame_processed(self, original_frame: np.ndarray, preprocessed_frame: np.ndarray, 
                           detections: List[Dict], metrics: Dict):
@@ -2672,7 +3034,6 @@ class QRAnalysisMainWindow(QMainWindow):
 
     def on_error(self, error_msg: str):
         """오류 발생"""
-        print(f">>> ERROR SIGNAL RECEIVED: {error_msg}")  # 디버그
         QMessageBox.critical(self, "오류", error_msg)
         self.stop_processing()
     
@@ -3082,21 +3443,11 @@ _app_started = False
 def main():
     global _app_started
     
-    print("\n" + "="*60)
-    print("=== MAIN() FUNCTION CALLED ===")
-    print(f">>> _app_started flag: {_app_started}")
-    print("="*60)
-    import traceback
-    traceback.print_stack()
-    print("="*60 + "\n")
-    
     # 이미 실행 중이면 종료
     if _app_started:
-        print(">>> main() already running! Ignoring duplicate call.")
         return
     
     _app_started = True
-    print(">>> Setting _app_started = True")
     
     app = QApplication(sys.argv)
     
@@ -3105,9 +3456,7 @@ def main():
     app.setFont(font)
     
     # 로그인 다이얼로그 표시
-    print(">>> Creating LoginDialog...")
     login = LoginDialog()
-    print(">>> Showing LoginDialog...")
     if login.exec() == QDialog.DialogCode.Accepted:
         # 로그인 성공 시 메인 윈도우 실행
         window = QRAnalysisMainWindow()
@@ -3123,5 +3472,4 @@ if __name__ == '__main__':
     from multiprocessing import freeze_support
     freeze_support()
     
-    print(">>> __main__ block executing...")
     main()
