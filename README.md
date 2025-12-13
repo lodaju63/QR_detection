@@ -207,3 +207,4 @@ Issues: [GitHub Issues](https://github.com/lodaju63/qr_analyzer/issues)
 
 **🚀 QR Analyzer - High Performance QR Code Video Analysis Desktop App**
 
+

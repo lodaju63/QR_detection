@@ -35,6 +35,7 @@ if sys.stderr is None:
 import cv2
 import numpy as np
 import time
+import queue
 from collections import defaultdict, deque
 from datetime import datetime
 from typing import Optional, List, Dict, Tuple
@@ -47,7 +48,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox, QStyleOptionSlider, QDoubleSpinBox, QSpinBox, QInputDialog
 )
 from PyQt6.QtCore import (
-    QThread, pyqtSignal, Qt, QTimer, QSize
+    QThread, pyqtSignal, Qt, QTimer, QSize, QObject, QMutex, QMutexLocker
 )
 from PyQt6.QtGui import QImage, QPixmap, QFont
 
@@ -389,6 +390,599 @@ class PreprocessingDialog(QDialog):
 # QThread Worker 클래스 (영상 처리 스레드)
 # ============================================================================
 
+
+# ============================================================================
+# 비동기 멀티스레딩 아키텍처 (끊김 없는 재생)
+# ============================================================================
+
+class AnalysisWorker(QThread):
+    """
+    분석 전담 Worker - 백그라운드에서 YOLO + Dynamsoft 해독 수행
+    큐에서 프레임을 받아서 분석하고 결과를 반환
+    """
+    result_ready = pyqtSignal(int, list, dict)  # (frame_idx, detections, metrics)
+
+    def __init__(self, input_queue, yolo_model, dbr_reader, conf_threshold=0.25):
+        super().__init__()
+        self.input_queue = input_queue
+        self.yolo_model = yolo_model
+        self.dbr_reader = dbr_reader
+        self.conf_threshold = conf_threshold
+        self.preprocessing_options = {}
+        self.running = True
+
+    def update_options(self, options):
+        """전처리 옵션 업데이트"""
+        self.preprocessing_options = options
+    
+    def update_conf_threshold(self, threshold):
+        """YOLO 신뢰도 임계값 업데이트"""
+        self.conf_threshold = threshold
+
+    def stop(self):
+        """분석 스레드 정지"""
+        self.running = False
+
+    def run(self):
+        """메인 분석 루프 (백그라운드에서 계속 실행)"""
+        while self.running:
+            try:
+                # 큐에서 최신 프레임 꺼내기 (timeout 0.1초)
+                frame, frame_idx, fps, total_frames = self.input_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+
+            # --- [무거운 분석 작업 수행] ---
+            try:
+                # 1. 전처리
+                processed_frame = self._apply_preprocessing(frame)
+
+                # 2. YOLO 탐지
+                detections = self._detect_qr_codes(processed_frame)
+
+                # 3. Dynamsoft 해독
+                for det in detections:
+                    self._decode_qr_code(processed_frame, det)
+
+                # 4. 분석 지표 계산
+                metrics = self._calculate_metrics(processed_frame, detections)
+                metrics['frame_idx'] = frame_idx
+                metrics['frame_no'] = frame_idx
+                metrics['total_frames'] = total_frames
+                metrics['has_success'] = any(d.get('success', False) for d in detections)
+                metrics['fps'] = fps
+
+                # 5. 결과 전송
+                self.result_ready.emit(frame_idx, detections, metrics)
+            except Exception as e:
+                print(f"[AnalysisWorker] 분석 오류: {e}")
+                import traceback
+                traceback.print_exc()
+
+            # 큐 작업 완료 알림
+            self.input_queue.task_done()
+
+    def _apply_preprocessing(self, frame: np.ndarray) -> np.ndarray:
+        """전처리 적용"""
+        result = frame.copy()
+        opts = self.preprocessing_options
+        
+        if not opts:
+            return result
+        
+        # CLAHE
+        if opts.get('use_clahe', False):
+            result = apply_clahe(result, opts.get('clahe_clip_limit', 2.0), opts.get('clahe_tile_size', 8))
+        
+        # 노이즈 제거
+        if opts.get('use_denoise', False):
+            method = opts.get('denoise_method', 'bilateral')
+            strength = opts.get('denoise_strength', 9)
+            if method == 'bilateral':
+                result = apply_bilateral_filter(result, strength, 75, 75)
+            elif method == 'gaussian':
+                result = apply_gaussian_blur(result, strength)
+            elif method == 'median':
+                result = apply_median_blur(result, strength)
+        
+        # 이진화
+        if opts.get('use_threshold', False):
+            result = apply_adaptive_threshold(result, opts.get('threshold_block_size', 11), opts.get('threshold_c', 2))
+        
+        # 형태학적 연산
+        if opts.get('use_morphology', False):
+            result = apply_morphology(result, opts.get('morphology_operation', 'closing'), opts.get('morphology_kernel_size', 5))
+        
+        return result
+    
+    def _detect_qr_codes(self, frame: np.ndarray) -> List[Dict]:
+        """YOLO로 QR 코드 탐지"""
+        detections = []
+        try:
+            results = self.yolo_model(frame, conf=self.conf_threshold, verbose=False)
+            result = results[0]
+            
+            if result.boxes is not None and len(result.boxes) > 0:
+                h, w = frame.shape[:2]
+                for box in result.boxes:
+                    conf = float(box.conf[0])
+                    xyxy = box.xyxy[0].cpu().numpy()
+                    x1, y1, x2, y2 = map(int, xyxy)
+                    
+                    # 패딩 추가
+                    pad = 20
+                    x1 = max(0, x1 - pad)
+                    y1 = max(0, y1 - pad)
+                    x2 = min(w, x2 + pad)
+                    y2 = min(h, y2 + pad)
+                    
+                    detections.append({
+                        'bbox': [x1, y1, x2, y2],
+                        'confidence': conf,
+                        'text': '',
+                        'quad': None,
+                        'success': False,
+                        'center': [(x1 + x2) // 2, (y1 + y2) // 2],
+                        'area': (x2 - x1) * (y2 - y1)
+                    })
+        except Exception as e:
+            print(f"[AnalysisWorker] YOLO 탐지 오류: {e}")
+            
+        return detections
+    
+    def _decode_qr_code(self, frame: np.ndarray, detection: Dict):
+        """Dynamsoft로 QR 코드 해독"""
+        if self.dbr_reader is None:
+            return
+            
+        try:
+            x1, y1, x2, y2 = detection['bbox']
+            roi = frame[y1:y2, x1:x2]
+            
+            if roi.size == 0:
+                return
+            
+            # RGB 변환
+            if len(roi.shape) == 3 and roi.shape[2] == 3:
+                rgb_image = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
+            else:
+                rgb_image = cv2.cvtColor(roi, cv2.COLOR_GRAY2RGB)
+            
+            # Dynamsoft 해독
+            captured_result = self.dbr_reader.capture(rgb_image, dbr.EnumImagePixelFormat.IPF_RGB_888)
+            
+            # 결과 추출
+            barcode_result = None
+            items = None
+            
+            if hasattr(captured_result, 'get_decoded_barcodes_result'):
+                barcode_result = captured_result.get_decoded_barcodes_result()
+                if barcode_result:
+                    items = barcode_result.get_items() if hasattr(barcode_result, 'get_items') else None
+            
+            if not items and hasattr(captured_result, 'items'):
+                items = captured_result.items
+            
+            if not items and hasattr(captured_result, 'decoded_barcodes_result'):
+                barcode_result = captured_result.decoded_barcodes_result
+                if barcode_result:
+                    items = barcode_result.items if hasattr(barcode_result, 'items') else None
+            
+            if items and len(items) > 0:
+                barcode_item = items[0]
+                
+                # 텍스트 추출
+                text = None
+                if hasattr(barcode_item, 'get_text'):
+                    text = barcode_item.get_text()
+                elif hasattr(barcode_item, 'text'):
+                    text = barcode_item.text
+                
+                # Quad 좌표 추출
+                quad_xy = None
+                try:
+                    location = barcode_item.get_location() if hasattr(barcode_item, 'get_location') else None
+                    if location:
+                        result_points = location.result_points if hasattr(location, 'result_points') else None
+                        if result_points:
+                            quad_xy = [[int(p.x + x1), int(p.y + y1)] for p in result_points]
+                except:
+                    pass
+                
+                # Detection 업데이트
+                detection['text'] = text or ''
+                detection['quad'] = quad_xy
+                detection['success'] = len(detection['text']) > 0
+            else:
+                detection['text'] = ''
+                detection['success'] = False
+                    
+        except Exception as e:
+            detection['text'] = ''
+            detection['success'] = False
+    
+    def _calculate_metrics(self, frame: np.ndarray, detections: List[Dict]) -> Dict:
+        """분석 지표 계산"""
+        metrics = {}
+        
+        # Blur Score (Laplacian Variance)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+        blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+        metrics['blur_score'] = blur_score
+        
+        # Brightness (평균 밝기)
+        brightness = np.mean(gray)
+        metrics['brightness'] = brightness
+        
+        # QR Box Size (평균)
+        if detections:
+            avg_area = np.mean([d['area'] for d in detections])
+            metrics['qr_box_size'] = avg_area
+        else:
+            metrics['qr_box_size'] = 0
+        
+        # 인식 성공 여부
+        metrics['has_success'] = any(d['success'] for d in detections)
+        
+        return metrics
+
+
+class VideoPlayThread(QThread):
+    """
+    영상 재생 전담 Thread - 영상을 끊김 없이 30 FPS로 재생
+    분석 결과를 기다리지 않고 계속 프레임을 송출
+    **핵심: 모든 프레임을 표시하되, 분석 요청만 프레임 간격에 맞춤**
+    """
+    # UI로 보낼 최종 이미지 (원본 + 박스 그려진 것)
+    frame_ready = pyqtSignal(np.ndarray, np.ndarray, list, dict)
+    timeline_updated = pyqtSignal(int, int, float)  # (current_frame, total_frames, current_time)
+    progress_updated = pyqtSignal(int, int)  # (current_frame, total_frames)
+    finished = pyqtSignal()
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self, video_path, analysis_queue):
+        super().__init__()
+        self.video_path = video_path
+        self.analysis_queue = analysis_queue  # 분석가에게 줄 우체통
+        self.running = True
+        self.paused = False
+        self.seek_request = -1
+        self.frame_interval = 1  # 분석 프레임 간격 (1=모든 프레임 분석)
+        self.display_mode = 'all'
+        
+        # 최신 분석 결과 저장소 - QMutex로 스레드 안전성 확보
+        self.result_mutex = QMutex()
+        self.latest_detections = []
+        self.latest_metrics = {}
+        self.latest_result_frame_idx = -1
+        self.preprocessing_options = {}  # 전처리 옵션 저장
+        
+        self.cap = None
+        self.total_frames = 0
+        self.fps = 30
+
+    def update_latest_result(self, frame_idx, detections, metrics):
+        """분석가가 결과를 던져주면 여기서 받아서 저장 (스레드 안전)"""
+        with QMutexLocker(self.result_mutex):
+            self.latest_detections = detections.copy() if detections else []
+            self.latest_metrics = metrics.copy() if metrics else {}
+            self.latest_result_frame_idx = frame_idx
+
+    def set_display_mode(self, mode: str):
+        """디스플레이 모드 설정"""
+        self.display_mode = mode
+    
+    def set_frame_interval(self, interval: int):
+        """분석 프레임 간격 설정"""
+        self.frame_interval = max(1, interval)
+
+    def set_preprocessing_options(self, options: Dict):
+        """전처리 옵션 설정"""
+        self.preprocessing_options = options
+
+    def pause(self):
+        """일시정지"""
+        self.paused = True
+
+    def resume(self):
+        """재개"""
+        self.paused = False
+
+    def stop(self):
+        """정지"""
+        self.running = False
+
+    def seek(self, frame_no):
+        """특정 프레임으로 이동"""
+        self.seek_request = frame_no
+
+    def run(self):
+        """메인 재생 루프 (영상을 끊김 없이 송출) - 모든 프레임 표시"""
+        try:
+            if not os.path.exists(self.video_path):
+                self.error_occurred.emit("비디오 파일을 찾을 수 없습니다.")
+                return
+
+            cap = cv2.VideoCapture(self.video_path)
+            if not cap.isOpened():
+                self.error_occurred.emit("비디오 파일을 열 수 없습니다.")
+                return
+
+            self.cap = cap
+            self.fps = cap.get(cv2.CAP_PROP_FPS) or 30
+            self.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            frame_interval = 1.0 / self.fps
+            
+            frame_idx = 0
+            analysis_frame_counter = 0  # 분석 요청용 카운터
+
+            while self.running and cap.isOpened():
+                # Seek 처리
+                # Seek 처리
+                if self.seek_request >= 0:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, self.seek_request)
+                    frame_idx = self.seek_request
+                    self.seek_request = -1
+                    # 시크하면 이전 결과 지우기 (Mutex로 보호)
+                    with QMutexLocker(self.result_mutex):
+                        self.latest_detections = []
+                        self.latest_result_frame_idx = -1
+                    analysis_frame_counter = 0
+
+                # 일시정지
+                if self.paused:
+                    self.msleep(100)
+                    continue
+
+                start_time = time.time()
+                
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                frame_idx = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+                analysis_frame_counter += 1
+
+                # 타임라인 업데이트 (모든 프레임마다)
+                current_time = frame_idx / self.fps if self.fps > 0 else 0
+                self.timeline_updated.emit(frame_idx, self.total_frames, current_time)
+                
+                # --- [핵심: 분석 요청만 프레임 간격에 맞춤] ---
+                # frame_interval마다 한 번씩, 그리고 큐가 비어있을 때만 넣음
+                if analysis_frame_counter % self.frame_interval == 0 and self.analysis_queue.empty():
+                    try:
+                        # 프레임 복사본을 넘겨야 원본 훼손 방지
+                        self.analysis_queue.put_nowait((frame.copy(), frame_idx, self.fps, self.total_frames))
+                    except queue.Full:
+                        pass  # 이미 분석 중이면 패스 (자동 프레임 드롭)
+
+                # --- [시각화: 모든 프레임마다 화면 갱신] ---
+                # 조건문 밖에서 무조건 실행 -> 모든 프레임 표시
+                original_frame = frame.copy()
+                
+                # 전처리 적용
+                preprocessed_frame = self._apply_preprocessing(frame.copy())
+                
+                # 최신 분석 결과 가져오기 (Mutex로 보호)
+                with QMutexLocker(self.result_mutex):
+                    current_detections = self.latest_detections.copy() if self.latest_detections else []
+                    current_metrics = self.latest_metrics.copy() if self.latest_metrics else {}
+                
+                # 박스 그리기
+                vis_original = self._visualize_frame(original_frame.copy(), current_detections)
+                vis_preprocessed = self._visualize_frame(preprocessed_frame.copy(), current_detections)
+
+                # UI로 전송 (분석 안 기다림 -> 30FPS 유지됨)
+                self.frame_ready.emit(vis_original, vis_preprocessed, current_detections, current_metrics)
+                self.progress_updated.emit(frame_idx, self.total_frames)
+
+                # FPS 유지 (정밀한 대기)
+                elapsed = time.time() - start_time
+                delay = max(0, frame_interval - elapsed)
+                time.sleep(delay)
+
+        except Exception as e:
+            self.error_occurred.emit(f"재생 중 오류 발생: {str(e)}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            if cap:
+                cap.release()
+            self.finished.emit()
+
+    def _apply_preprocessing(self, frame: np.ndarray) -> np.ndarray:
+        """전처리 적용"""
+        result = frame.copy()
+        opts = self.preprocessing_options
+        
+        if not opts:
+            return result
+        
+        # CLAHE
+        if opts.get('use_clahe', False):
+            result = apply_clahe(result, opts.get('clahe_clip_limit', 2.0), opts.get('clahe_tile_size', 8))
+        
+        # 노이즈 제거
+        if opts.get('use_denoise', False):
+            method = opts.get('denoise_method', 'bilateral')
+            strength = opts.get('denoise_strength', 9)
+            if method == 'bilateral':
+                result = apply_bilateral_filter(result, strength, 75, 75)
+            elif method == 'gaussian':
+                result = apply_gaussian_blur(result, strength)
+            elif method == 'median':
+                result = apply_median_blur(result, strength)
+        
+        # 이진화
+        if opts.get('use_threshold', False):
+            result = apply_adaptive_threshold(result, opts.get('threshold_block_size', 11), opts.get('threshold_c', 2))
+        
+        # 형태학적 연산
+        if opts.get('use_morphology', False):
+            result = apply_morphology(result, opts.get('morphology_operation', 'closing'), opts.get('morphology_kernel_size', 5))
+        
+        return result
+        
+    def _visualize_frame(self, frame: np.ndarray, detections: List[Dict]) -> np.ndarray:
+        """프레임에 QR 탐지 결과 시각화"""
+        vis_frame = frame.copy()
+        
+        # 디스플레이 모드에 따른 필터링
+        filtered_detections = detections
+        if self.display_mode == 'success':
+            filtered_detections = [d for d in detections if d.get('success', False)]
+        elif self.display_mode == 'fail':
+            filtered_detections = [d for d in detections if not d.get('success', False)]
+        
+        if not filtered_detections:
+            # 탐지된 QR이 없을 때 "Searching..." 표시
+            cv2.putText(vis_frame, "Searching...", (50, 50),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)
+        else:
+            # QR 코드 그리기
+            for det in filtered_detections:
+                color = (0, 255, 0) if det.get('success', False) else (0, 0, 255)
+                
+                # Quad 사용 (우선)
+                if det.get('quad') and len(det['quad']) == 4:
+                    quad = np.array(det['quad'], dtype=np.int32)
+                    cv2.polylines(vis_frame, [quad], True, color, 2)
+                else:
+                    # BBox 사용
+                    x1, y1, x2, y2 = det['bbox']
+                    cv2.rectangle(vis_frame, (x1, y1), (x2, y2), color, 2)
+                
+                # 텍스트 표시 (해독 성공 시)
+                if det.get('success') and det.get('text'):
+                    x1, y1 = det['bbox'][:2]
+                    cv2.putText(vis_frame, det['text'][:20], (x1, y1 - 10),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        
+        return vis_frame
+
+
+class VideoManager(QObject):
+    """
+    비동기 영상 처리 매니저
+    VideoPlayThread와 AnalysisWorker를 관리하고 동기화
+    """
+    # 외부로 전달할 시그널
+    frame_ready = pyqtSignal(np.ndarray, np.ndarray, list, dict)
+    timeline_updated = pyqtSignal(int, int, float)
+    progress_updated = pyqtSignal(int, int)
+    finished = pyqtSignal()
+    error_occurred = pyqtSignal(str)
+    
+    def __init__(self, yolo_model, dbr_reader):
+        super().__init__()
+        # 통신용 큐 (크기 1 = 최신 프레임만 유지, 자동 프레임 드롭)
+        self.queue = queue.Queue(maxsize=1)
+        
+        self.yolo_model = yolo_model
+        self.dbr_reader = dbr_reader
+        
+        self.play_thread = None
+        self.analysis_thread = None
+        self.is_running = False
+        self.is_paused = False
+
+    def start(self, video_path, preprocessing_options=None, conf_threshold=0.25, frame_interval=1):
+        """비동기 처리 시작"""
+        # 1. 분석 스레드 생성 및 시작
+        self.analysis_thread = AnalysisWorker(self.queue, self.yolo_model, self.dbr_reader, conf_threshold)
+        if preprocessing_options:
+            self.analysis_thread.update_options(preprocessing_options)
+        self.analysis_thread.start()
+
+        # 2. 재생 스레드 생성
+        self.play_thread = VideoPlayThread(video_path, self.queue)
+        self.play_thread.set_frame_interval(frame_interval)
+        if preprocessing_options:
+            self.play_thread.set_preprocessing_options(preprocessing_options)
+        
+        # 3. 신호 연결 (분석 결과 -> 플레이어에게 전달) - DirectConnection으로 스레드 안전성 확보
+        self.analysis_thread.result_ready.connect(self.play_thread.update_latest_result, Qt.ConnectionType.DirectConnection)
+        
+        # 4. 플레이어 시그널을 외부로 중계
+        self.play_thread.frame_ready.connect(self.frame_ready.emit)
+        self.play_thread.timeline_updated.connect(self.timeline_updated.emit)
+        self.play_thread.progress_updated.connect(self.progress_updated.emit)
+        self.play_thread.finished.connect(self._on_finished)
+        self.play_thread.error_occurred.connect(self.error_occurred.emit)
+        
+        # 5. 재생 시작
+        self.play_thread.start()
+        self.is_running = True
+        self.is_paused = False
+
+    def pause(self):
+        """일시정지"""
+        if self.play_thread:
+            self.play_thread.pause()
+            self.is_paused = True
+
+    def resume(self):
+        """재개"""
+        if self.play_thread:
+            self.play_thread.resume()
+            self.is_paused = False
+
+    def stop(self):
+        """정지"""
+        self.is_running = False
+        
+        # 종료 순서 중요: 재생 -> 분석
+        if self.play_thread:
+            self.play_thread.stop()
+            self.play_thread.wait()
+        
+        if self.analysis_thread:
+            self.analysis_thread.stop()
+            self.analysis_thread.wait()
+    
+    def wait(self):
+        """스레드 종료 대기 (QThread.wait()와 호환성을 위한 메서드)"""
+        # stop()에서 이미 모든 스레드의 wait()를 호출했으므로
+        # 여기서는 추가 작업이 필요 없음
+        pass
+
+    def seek_to(self, frame_number: int):
+        """특정 프레임으로 이동"""
+        if self.play_thread:
+            self.play_thread.seek(frame_number)
+
+    def set_display_mode(self, mode: str):
+        """디스플레이 모드 설정"""
+        if self.play_thread:
+            self.play_thread.set_display_mode(mode)
+
+    def set_frame_interval(self, interval: int):
+        """프레임 간격 설정"""
+        if self.play_thread:
+            self.play_thread.set_frame_interval(interval)
+
+    def set_preprocessing_options(self, options: Dict):
+        """전처리 옵션 설정"""
+        # AnalysisWorker에 전처리 옵션 전달 (분석용)
+        if self.analysis_thread:
+            self.analysis_thread.update_options(options)
+        
+        # VideoPlayThread에 전처리 옵션 전달 (화면 표시용)
+        if self.play_thread:
+            self.play_thread.set_preprocessing_options(options)
+
+    def set_conf_threshold(self, threshold: float):
+        """YOLO 신뢰도 임계값 설정"""
+        if self.analysis_thread:
+            self.analysis_thread.update_conf_threshold(threshold)
+
+    def _on_finished(self):
+        """재생 완료 시 호출"""
+        self.is_running = False
+        self.finished.emit()
+
+
+# ============================================================================
 class VideoProcessorWorker(QThread):
     """
     영상 처리를 담당하는 Worker Thread
@@ -822,7 +1416,7 @@ class QRAnalysisMainWindow(QMainWindow):
         self.video_path = None
         self.worker = None
         self.preprocessing_options = {}
-        
+        self.processing_mode = 'sync'  # 'sync' 또는 'async'
         # 데이터 버퍼 (실시간 그래프용)
         self.frame_indices = deque(maxlen=500)  # 최근 500 프레임
         self.success_history = deque(maxlen=500)
@@ -955,7 +1549,21 @@ class QRAnalysisMainWindow(QMainWindow):
         self.frame_interval_spin.setToolTip("처리할 프레임 간격 (1=모든 프레임, 2=2프레임마다 1번)")
         self.frame_interval_spin.valueChanged.connect(self.on_frame_interval_changed)
         filter_layout.addWidget(self.frame_interval_spin)
+        # 처리 모드 선택
+        filter_layout.addWidget(QLabel("  |  모드:"))
+        self.btn_mode_sync = QPushButton("동기")
+        self.btn_mode_sync.setCheckable(True)
+        self.btn_mode_sync.setChecked(True)
+        self.btn_mode_sync.setMaximumWidth(60)
+        self.btn_mode_sync.clicked.connect(lambda: self.set_processing_mode('sync'))
         
+        self.btn_mode_async = QPushButton("비동기")
+        self.btn_mode_async.setCheckable(True)
+        self.btn_mode_async.setMaximumWidth(60)
+        self.btn_mode_async.clicked.connect(lambda: self.set_processing_mode('async'))
+        
+        filter_layout.addWidget(self.btn_mode_sync)
+        filter_layout.addWidget(self.btn_mode_async)
         filter_layout.addStretch()
         
         content_layout.addLayout(filter_layout)
@@ -979,7 +1587,7 @@ class QRAnalysisMainWindow(QMainWindow):
         self.btn_stop = QPushButton("⏹️ 정지")
         self.btn_stop.setMinimumHeight(40)
         self.btn_stop.setEnabled(False)
-        self.btn_stop.clicked.connect(self.stop_processing)
+        self.btn_stop.clicked.connect(lambda: self.stop_processing(show_message=True))
         
         # 타임라인 정보 라벨
         self.timeline_label = QLabel("00:00 / 00:00")
@@ -1727,6 +2335,7 @@ class QRAnalysisMainWindow(QMainWindow):
         print(f">>> Model: {self.yolo_model}")
         print(f">>> Video: {self.video_path}")
         print(f">>> DBR Reader: {self.dbr_reader}")
+        print(f">>> Processing Mode: {self.processing_mode}")
         print(">>> Initializing data...")
         
         # 데이터 초기화
@@ -1740,22 +2349,42 @@ class QRAnalysisMainWindow(QMainWindow):
         self.unique_qr_texts.clear()
         self.log_table.setRowCount(0)
         self.all_log_entries.clear()
-        
-        print("Creating worker thread...")  # 디버그용
-        
-        # Worker Thread 생성 및 시작
-        self.worker = VideoProcessorWorker()
-        self.worker.set_video(self.video_path)
-        self.worker.set_model(self.yolo_model, self.dbr_reader)
-        self.worker.set_preprocessing_options(self.preprocessing_options)
-        self.worker.set_frame_interval(self.frame_interval_spin.value())
-        self.worker.frame_processed.connect(self._on_frame_processed)
-        self.worker.timeline_updated.connect(self.on_timeline_updated)
-        self.worker.finished.connect(self.on_processing_finished)
-        self.worker.error_occurred.connect(self.on_error)
-        print("Starting worker thread...")  # 디버그
-        self.worker.start()
-        print("Worker thread started!")  # 디버그
+        self._finished_message_shown = False
+
+        # 모드에 따라 다른 Worker 사용
+        if self.processing_mode == 'async':
+            print("Creating VideoManager (비동기 모드)...")
+            self.worker = VideoManager(self.yolo_model, self.dbr_reader)
+            
+            # 시그널 연결
+            self.worker.frame_ready.connect(self._on_frame_processed)
+            self.worker.timeline_updated.connect(self.on_timeline_updated)
+            self.worker.progress_updated.connect(lambda cur, total: None)
+            self.worker.finished.connect(self.on_processing_finished)
+            self.worker.error_occurred.connect(self.on_error)
+            
+            # 비동기 처리 시작
+            self.worker.start(
+                video_path=self.video_path,
+                preprocessing_options=self.preprocessing_options,
+                conf_threshold=0.25,
+                frame_interval=self.frame_interval_spin.value()
+            )
+            print("Async processing started! 🚀")
+        else:
+            print("Creating VideoProcessorWorker (동기 모드)...")
+            self.worker = VideoProcessorWorker()
+            self.worker.set_video(self.video_path)
+            self.worker.set_model(self.yolo_model, self.dbr_reader)
+            self.worker.set_preprocessing_options(self.preprocessing_options)
+            self.worker.set_frame_interval(self.frame_interval_spin.value())
+            self.worker.frame_processed.connect(self._on_frame_processed)
+            self.worker.timeline_updated.connect(self.on_timeline_updated)
+            self.worker.finished.connect(self.on_processing_finished)
+            self.worker.error_occurred.connect(self.on_error)
+            print("Starting worker thread...")
+            self.worker.start()
+            print("Worker thread started!")
         
         self.btn_start.setEnabled(False)
         self.btn_pause.setEnabled(True)
@@ -1772,12 +2401,27 @@ class QRAnalysisMainWindow(QMainWindow):
                 self.worker.pause()
                 self.btn_pause.setText("▶️ 재개")
     
-    def stop_processing(self):
+    def stop_processing(self, show_message=False):
         """정지"""
+        # 정지 버튼을 눌렀을 때는 완료 메시지가 표시되지 않도록 플래그 설정
+        if show_message:
+            self._finished_message_shown = True
+        
         if self.worker:
             self.worker.stop()
-            self.worker.wait()
+            # wait() 메서드가 있는 경우에만 호출 (동기/비동기 모두 호환)
+            if hasattr(self.worker, 'wait'):
+                self.worker.wait()
+            
+            # worker 정지 후 is_running을 False로 설정하여 모드 변경 가능하도록 함
+            if hasattr(self.worker, 'is_running'):
+                self.worker.is_running = False
         
+        # 정지 메시지 표시 (정지 버튼을 눌렀을 때만) - 비동기 모드에서도 표시
+        if show_message:
+            QMessageBox.information(self, "정지", "정지되었습니다.")
+        
+        # 버튼 활성화 (항상 실행 - 정지 버튼을 눌렀을 때와 영상 완료 시 모두)
         self.btn_start.setEnabled(True)
         self.btn_pause.setEnabled(False)
         self.btn_stop.setEnabled(False)
@@ -1794,11 +2438,97 @@ class QRAnalysisMainWindow(QMainWindow):
         # Worker에 전달
         if self.worker:
             self.worker.set_display_mode(mode)
-    
+
+    def set_processing_mode(self, mode: str):
+        """처리 모드 설정"""
+        # 처리 중인지 확인
+        if self.worker:
+            is_running = getattr(self.worker, 'is_running', False) or (hasattr(self.worker, 'isRunning') and self.worker.isRunning())
+            if is_running:
+                QMessageBox.warning(self, "모드 변경 불가", "영상 처리가 진행 중입니다.\n정지 또는 완료 후 모드를 변경할 수 있습니다.")
+                # 이전 모드로 버튼 상태 복원
+                if self.processing_mode == 'sync':
+                    self.btn_mode_sync.setChecked(True)
+                    self.btn_mode_async.setChecked(False)
+                else:
+                    self.btn_mode_sync.setChecked(False)
+                    self.btn_mode_async.setChecked(True)
+                return
+        
+        # 모드 변경 확인
+        mode_name = "동기 모드" if mode == 'sync' else "비동기 모드"
+        desc = "동기 모드: 안정적이지만 프레임 간격에 따라 영상이 끊길 수 있습니다." if mode == 'sync' else "비동기 모드: 영상은 부드럽지만 박스가 약간 지연될 수 있습니다."
+        reply = QMessageBox.question(
+            self, 
+            "모드 변경", 
+            f"{mode_name}로 변경하시겠습니까?\n\n{desc}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.processing_mode = mode
+            if mode == 'sync':
+                self.btn_mode_sync.setChecked(True)
+                self.btn_mode_async.setChecked(False)
+            else:
+                self.btn_mode_sync.setChecked(False)
+                self.btn_mode_async.setChecked(True)
+        else:
+            # 변경 취소 - 이전 모드로 버튼 상태 복원
+            if self.processing_mode == 'sync':
+                self.btn_mode_sync.setChecked(True)
+                self.btn_mode_async.setChecked(False)
+            else:
+                self.btn_mode_sync.setChecked(False)
+                self.btn_mode_async.setChecked(True)
+        
+    def on_processing_finished(self):
+        """처리 완료"""
+        # 중복 호출 방지 (정지 버튼을 눌렀을 때는 메시지 표시 안 함)
+        if hasattr(self, '_finished_message_shown') and self._finished_message_shown:
+            # 이미 정지된 상태면 버튼만 활성화 (정지 버튼을 눌렀을 때)
+            self.btn_start.setEnabled(True)
+            self.btn_pause.setEnabled(False)
+            self.btn_stop.setEnabled(False)
+            self.btn_pause.setText("⏸️ 일시정지")
+            self.timeline_slider.setEnabled(False)
+            
+            # worker 정지 후 is_running을 False로 설정하여 모드 변경 가능하도록 함
+            if self.worker:
+                if hasattr(self.worker, 'is_running'):
+                    self.worker.is_running = False
+            return
+        
+        # 완료 메시지 표시
+        QMessageBox.information(self, "완료", "영상 처리가 완료되었습니다!")
+        self._finished_message_shown = True
+        
+        # 정지 처리 및 버튼 활성화
+        # worker는 이미 종료되었으므로 stop() 호출 없이 버튼만 활성화
+        if self.worker:
+            # worker 정지 후 is_running을 False로 설정하여 모드 변경 가능하도록 함
+            if hasattr(self.worker, 'is_running'):
+                self.worker.is_running = False
+            
+            # 동기 모드에서는 stop() 호출
+            if self.processing_mode == 'sync':
+                self.worker.stop()
+                self.worker.wait()
+        
+        # 버튼 활성화 (항상 실행 - 영상 완료 시) - 비동기 모드에서도 확실히 활성화
+        self.btn_start.setEnabled(True)
+        self.btn_pause.setEnabled(False)
+        self.btn_stop.setEnabled(False)
+        self.btn_pause.setText("⏸️ 일시정지")
+        self.timeline_slider.setEnabled(False)
+        
     def on_frame_interval_changed(self, value: int):
         """프레임 간격 변경"""
-        if self.worker and self.worker.isRunning():
-            self.worker.set_frame_interval(value)
+        if self.worker:
+            # VideoManager는 is_running 속성 사용, VideoProcessorWorker는 isRunning() 메서드 사용
+            is_running = getattr(self.worker, 'is_running', False) or (hasattr(self.worker, 'isRunning') and self.worker.isRunning())
+            if is_running:
+                self.worker.set_frame_interval(value)
     
     def set_log_filter(self, mode: str):
         """로그 필터 모드 설정"""
@@ -1868,9 +2598,32 @@ class QRAnalysisMainWindow(QMainWindow):
     
     def on_processing_finished(self):
         """처리 완료"""
+        # 중복 호출 방지 (정지 버튼을 눌렀을 때는 메시지 표시 안 함)
+        if hasattr(self, '_finished_message_shown') and self._finished_message_shown:
+            # 이미 정지된 상태면 버튼만 활성화
+            self.btn_start.setEnabled(True)
+            self.btn_pause.setEnabled(False)
+            self.btn_stop.setEnabled(False)
+            self.btn_pause.setText("⏸️ 일시정지")
+            self.timeline_slider.setEnabled(False)
+            return
+        
+        # 완료 메시지 표시
         QMessageBox.information(self, "완료", "영상 처리가 완료되었습니다!")
-        self.stop_processing()
-    
+        self._finished_message_shown = True
+        
+        # 정지 처리 및 버튼 활성화
+        # worker는 이미 종료되었으므로 stop() 호출 없이 버튼만 활성화
+        if self.worker:
+            self.worker.stop()
+            self.worker.wait()
+        
+        self.btn_start.setEnabled(True)
+        self.btn_pause.setEnabled(False)
+        self.btn_stop.setEnabled(False)
+        self.btn_pause.setText("⏸️ 일시정지")
+        self.timeline_slider.setEnabled(False)
+
     def on_error(self, error_msg: str):
         """오류 발생"""
         print(f">>> ERROR SIGNAL RECEIVED: {error_msg}")  # 디버그
@@ -1966,8 +2719,10 @@ class QRAnalysisMainWindow(QMainWindow):
         h, w, ch = rgb_frame.shape
         bytes_per_line = ch * w
         
-        # QImage 생성
-        q_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+        # QImage 생성 - 메모리 안전성을 위해 copy() 사용
+        # rgb_frame.data는 포인터이므로 함수 종료 후 메모리가 해제될 수 있음
+        rgb_frame_copy = rgb_frame.copy()
+        q_image = QImage(rgb_frame_copy.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
         
         # 라벨 크기에 맞춰 스케일링
         pixmap = QPixmap.fromImage(q_image)
