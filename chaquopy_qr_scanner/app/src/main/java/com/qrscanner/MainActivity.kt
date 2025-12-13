@@ -46,11 +46,12 @@ class MainActivity : AppCompatActivity() {
         resultText = findViewById(R.id.resultText)
         roiBorder = findViewById(R.id.roiBorder)
         debugText = findViewById(R.id.debugText)
+        debugScrollView = findViewById(R.id.debugScrollView)
         
         // 디버그 텍스트 표시 (개발 중)
         debugText.visibility = android.view.View.VISIBLE
-        debugText.text = "⏳ 초기화 중...\n카메라를 시작합니다."
-        debugText.setTextColor(Color.WHITE)
+        addLog("⏳ 앱 시작", Color.WHITE)
+        addLog("초기화 중...", Color.WHITE)
         resultText.setTextColor(Color.WHITE)
         
         // ROI 영역 테두리 설정 (레이아웃 완료 후)
@@ -82,22 +83,22 @@ class MainActivity : AppCompatActivity() {
                     if (isSuccess) {
                         try {
                             barcodeReader = BarcodeReader()
-                            debugText.text = "✅ Dynamsoft 초기화 완료\n카메라 시작 중..."
-                            debugText.setTextColor(Color.GREEN)
+                            addLog("✅ Dynamsoft 초기화 완료", Color.GREEN)
+                            addLog("카메라 시작 중...", Color.GREEN)
                             android.util.Log.d("MainActivity", "Dynamsoft 초기화 성공")
                         } catch (e: Exception) {
                             e.printStackTrace()
-                            debugText.text = "❌ Dynamsoft 초기화 실패: ${e.message}"
-                            debugText.setTextColor(Color.RED)
+                            addLog("❌ Dynamsoft 초기화 실패: ${e.message}", Color.RED)
                             Toast.makeText(this@MainActivity, "Dynamsoft 초기화 실패", Toast.LENGTH_SHORT).show()
                         }
                     } else {
                         error?.printStackTrace()
                         val errorMsg = error?.message ?: "알 수 없는 오류"
                         val errorClass = error?.javaClass?.simpleName ?: "Unknown"
-                        val fullError = "❌ 라이선스 검증 실패\n\n오류: $errorClass\n메시지: $errorMsg\n\n인터넷 연결을 확인하세요."
-                        debugText.text = fullError
-                        debugText.setTextColor(Color.RED)
+                        addLog("❌ 라이선스 검증 실패!", Color.RED)
+                        addLog("오류 타입: $errorClass", Color.RED)
+                        addLog("메시지: $errorMsg", Color.RED)
+                        addLog("인터넷 연결을 확인하세요", Color.YELLOW)
                         
                         // 상세 로그 출력
                         android.util.Log.e("MainActivity", "Dynamsoft 라이선스 검증 실패", error)
@@ -108,6 +109,10 @@ class MainActivity : AppCompatActivity() {
                         }
                         
                         Toast.makeText(this@MainActivity, "Dynamsoft 라이선스 검증 실패: $errorMsg", Toast.LENGTH_LONG).show()
+                        
+                        // 라이선스 검증 실패 시 카메라 시작하지 않음
+                        addLog("⚠️ 라이선스 없이 카메라는 시작되지 않습니다", Color.RED)
+                        return@runOnUiThread
                     }
                 }
             }
@@ -155,8 +160,8 @@ class MainActivity : AppCompatActivity() {
                         runOnUiThread {
                             resultText.text = "QR: $text"
                             resultText.setTextColor(Color.GREEN)
-                            debugText.text = "✅ 해독 성공! (시도: $decodeAttemptCount)"
-                            debugText.setTextColor(Color.GREEN)
+                            addLog("✅ 해독 성공! (시도: $decodeAttemptCount)", Color.GREEN)
+                            addLog("QR 코드: $text", Color.GREEN)
                             decodeAttemptCount = 0
                         }
                     }, roiRect) { attemptCount, hasResult ->
@@ -171,14 +176,10 @@ class MainActivity : AppCompatActivity() {
                             lastDecodeTime = currentTime
                             
                             if (!hasResult) {
-                                // 간단하고 명확한 로그 표시
-                                val roiInfo = if (roiRect != null) "${roiRect.width()}x${roiRect.height()}" else "계산중"
-                                val logText = "🔍 스캔 중...\n\n시도: $attemptCount\nFPS: $fps\nROI: $roiInfo\n\n[상태] QR 코드 대기 중"
-                                debugText.text = logText
-                                debugText.setTextColor(Color.YELLOW)
-                                
-                                // 주기적으로 로그 출력 (매 10번째 시도마다)
+                                // 주기적으로 상태 업데이트 (매 10번째 시도마다)
                                 if (attemptCount % 10 == 0) {
+                                    val roiInfo = if (roiRect != null) "${roiRect.width()}x${roiRect.height()}" else "계산중"
+                                    addLog("🔍 스캔 중... 시도: $attemptCount | FPS: $fps | ROI: $roiInfo", Color.YELLOW)
                                     android.util.Log.d("MainActivity", "Scan attempt #$attemptCount, FPS: $fps, ROI: $roiInfo")
                                 }
                             }
@@ -198,14 +199,13 @@ class MainActivity : AppCompatActivity() {
                     imageAnalyzer
                 )
                 runOnUiThread {
-                    debugText.text = "✅ 카메라 시작 완료\nQR 코드를 스캔하세요..."
-                    debugText.setTextColor(Color.GREEN)
+                    addLog("✅ 카메라 시작 완료", Color.GREEN)
+                    addLog("QR 코드를 스캔하세요...", Color.GREEN)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
                 runOnUiThread {
-                    debugText.text = "❌ 카메라 시작 실패: ${e.message}"
-                    debugText.setTextColor(Color.RED)
+                    addLog("❌ 카메라 시작 실패: ${e.message}", Color.RED)
                 }
                 Toast.makeText(this, "카메라 시작 실패: ${e.message}", Toast.LENGTH_SHORT).show()
             }
@@ -298,6 +298,31 @@ class MainActivity : AppCompatActivity() {
             android.util.Log.e("MainActivity", "Error calculating ROI", e)
             null
         }
+    }
+
+    private fun addLog(message: String, color: Int) {
+        val timestamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+        val logEntry = "[$timestamp] $message"
+        logHistory.add(logEntry)
+        
+        // 최대 20개 로그만 유지
+        if (logHistory.size > 20) {
+            logHistory.removeAt(0)
+        }
+        
+        // 모든 로그를 하나의 텍스트로 합치기
+        val fullLog = logHistory.joinToString("\n")
+        debugText.text = fullLog
+        
+        // 마지막 로그의 색상으로 설정 (전체는 흰색으로)
+        debugText.setTextColor(Color.WHITE)
+        
+        // 스크롤을 맨 아래로
+        debugScrollView.post {
+            debugScrollView.fullScroll(android.view.View.FOCUS_DOWN)
+        }
+        
+        android.util.Log.d("MainActivity", logEntry)
     }
 
     companion object {
