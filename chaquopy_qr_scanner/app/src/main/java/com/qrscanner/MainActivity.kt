@@ -141,7 +141,13 @@ class MainActivity : AppCompatActivity() {
                             lastDecodeTime = currentTime
                             
                             if (!hasResult) {
-                                debugText.text = "🔍 스캔 중... (시도: $attemptCount, FPS: $fps)"
+                                // 로그를 누적하여 표시 (최대 5줄)
+                                val existingText = debugText.text.toString()
+                                val newLog = "시도 #$attemptCount | FPS: $fps | ROI: ${roiRect?.width()}x${roiRect?.height()}"
+                                val lines = existingText.split("\n").filter { it.isNotEmpty() && !it.startsWith("🔍") && !it.startsWith("시도") && !it.startsWith("FPS") && !it.startsWith("[로그]") }
+                                val logLines = (lines.takeLast(3) + newLog).takeLast(4)
+                                val logText = "🔍 스캔 중...\n시도: $attemptCount | FPS: $fps\n\n[로그]\n${logLines.joinToString("\n")}"
+                                debugText.text = logText
                                 debugText.setTextColor(Color.YELLOW)
                             }
                         }
@@ -194,15 +200,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupROIBorder() {
-        // ROI 영역 전체 테두리 그리기 (반투명 배경 + 테두리)
+        // ROI 영역 전체 테두리 그리기 (반투명 배경 + 전체 테두리)
         roiBorder.post {
             val width = roiBorder.width.toFloat()
             val height = roiBorder.height.toFloat()
             
-            // 전체 사각형 테두리
+            // 전체 사각형 테두리 (모서리만이 아니라 전체)
             val path = Path()
             path.addRect(0f, 0f, width, height, Path.Direction.CW)
             
+            // 반투명 배경 + 테두리를 위한 레이어드 드로어블
             val shapeDrawable = ShapeDrawable(PathShape(path, width, height))
             val paint = shapeDrawable.paint
             paint.color = Color.GREEN
@@ -210,32 +217,45 @@ class MainActivity : AppCompatActivity() {
             paint.strokeWidth = 6f
             paint.isAntiAlias = true
             
-            // 배경은 반투명 (XML에서 설정했지만 여기서도 확인)
+            // 배경은 XML에서 설정 (#40FFFFFF - 반투명 흰색)
+            // 여기서는 테두리만 추가
             roiBorder.background = shapeDrawable
+            
+            android.util.Log.d("MainActivity", "ROI Border setup: ${width}x${height}")
         }
     }
     
     private fun calculateROIRect(): android.graphics.Rect? {
-        // ROI 영역 계산 (화면 중앙 50% 영역 - 반으로 줄임)
+        // ROI 영역 계산 (정사각형, 상단 중앙 배치)
         return try {
-            val margin = 80 // dp를 픽셀로 변환 (40dp -> 80dp로 증가하여 영역을 반으로 줄임)
             val displayMetrics = resources.displayMetrics
-            val marginPx = (margin * displayMetrics.density).toInt()
+            val topMarginPx = (60 * displayMetrics.density).toInt() // 상단 여백
+            val bottomMarginPx = (200 * displayMetrics.density).toInt() // 하단 여백 (로그 공간)
             
             val screenWidth = previewView.width
             val screenHeight = previewView.height
             
             if (screenWidth > 0 && screenHeight > 0) {
+                // 정사각형 크기 계산 (화면 너비의 70%)
+                val roiSize = (screenWidth * 0.7f).toInt()
+                val roiLeft = (screenWidth - roiSize) / 2
+                val roiTop = topMarginPx
+                val roiRight = roiLeft + roiSize
+                val roiBottom = roiTop + roiSize
+                
+                android.util.Log.d("MainActivity", "ROI Rect: $roiLeft, $roiTop, $roiRight, $roiBottom (size: $roiSize)")
+                
                 android.graphics.Rect(
-                    marginPx,
-                    marginPx,
-                    screenWidth - marginPx,
-                    screenHeight - marginPx
+                    roiLeft,
+                    roiTop,
+                    roiRight,
+                    roiBottom
                 )
             } else {
                 null
             }
         } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error calculating ROI", e)
             null
         }
     }
