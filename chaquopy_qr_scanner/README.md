@@ -2,6 +2,8 @@
 
 Buildozer 대신 Chaquopy를 사용한 Android QR 스캐너 앱입니다.
 
+<!-- Trigger build -->
+
 ## 🚀 시작하기
 
 ### 1. Android Studio에서 프로젝트 열기
