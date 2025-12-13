@@ -46,7 +46,7 @@ android {
 // ✅ [핵심 수정] Kotlin DSL에서는 chaquopy 블록을 android 블록 밖(최상위)에 작성해야 합니다.
 chaquopy {
     defaultConfig {
-        version = "3.10"
+        version = "3.8"  // Python 3.8로 변경 (3.10은 패키지 호환성 문제)
         pip {
             install("opencv-python-headless==4.9.0.80")
             install("numpy")
