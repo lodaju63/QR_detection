@@ -88,9 +88,21 @@ class MainActivity : AppCompatActivity() {
                         }
                     } else {
                         error?.printStackTrace()
-                        debugText.text = "❌ 라이선스 검증 실패: ${error?.message ?: "알 수 없는 오류"}"
+                        val errorMsg = error?.message ?: "알 수 없는 오류"
+                        val errorClass = error?.javaClass?.simpleName ?: "Unknown"
+                        val fullError = "❌ 라이선스 검증 실패\n\n오류: $errorClass\n메시지: $errorMsg\n\n인터넷 연결을 확인하세요."
+                        debugText.text = fullError
                         debugText.setTextColor(Color.RED)
-                        Toast.makeText(this@MainActivity, "Dynamsoft 라이선스 검증 실패", Toast.LENGTH_SHORT).show()
+                        
+                        // 상세 로그 출력
+                        android.util.Log.e("MainActivity", "Dynamsoft 라이선스 검증 실패", error)
+                        android.util.Log.e("MainActivity", "Error class: $errorClass")
+                        android.util.Log.e("MainActivity", "Error message: $errorMsg")
+                        if (error != null) {
+                            android.util.Log.e("MainActivity", "Error stack trace: ${error.stackTraceToString()}")
+                        }
+                        
+                        Toast.makeText(this@MainActivity, "Dynamsoft 라이선스 검증 실패: $errorMsg", Toast.LENGTH_LONG).show()
                     }
                 }
             }
