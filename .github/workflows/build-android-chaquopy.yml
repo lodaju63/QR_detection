@@ -38,6 +38,8 @@ jobs:
           mkdir -p gradle/wrapper
           curl -L https://raw.githubusercontent.com/gradle/gradle/v8.2.0/gradle/wrapper/gradle-wrapper.jar -o gradle/wrapper/gradle-wrapper.jar
         fi
+        # 윈도우 줄바꿈(\r) 제거 (핵심!)
+        sed -i 's/\r$//' gradlew
         chmod +x gradlew
         chmod +x gradle/wrapper/gradle-wrapper.jar || true
     
@@ -53,7 +55,7 @@ jobs:
         # Gradle wrapper 확인
         ls -la gradle/wrapper/ || true
         # 빌드 실행
-        bash gradlew assembleDebug --no-daemon
+        ./gradlew assembleDebug --no-daemon
     
     - name: Check build result
       working-directory: ./chaquopy_qr_scanner
