@@ -2,7 +2,7 @@
 
 Buildozer 대신 Chaquopy를 사용한 Android QR 스캐너 앱입니다.
 
-<!-- Build trigger: 2024-12-13 -->
+<!-- Build trigger: 2024-12-13 20:00 -->
 
 ## 🚀 시작하기
 
