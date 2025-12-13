@@ -50,6 +50,7 @@ class MainActivity : AppCompatActivity() {
         
         // 디버그 텍스트 표시 (개발 중)
         debugText.visibility = android.view.View.VISIBLE
+        resultText.setTextColor(Color.WHITE)
 
         // Python 초기화
         if (!Python.isStarted()) {
