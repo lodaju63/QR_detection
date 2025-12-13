@@ -42,7 +42,7 @@ version = 0.1
 # ✅ 중요: android, jnius 추가
 # ⚠️ 주의: dynamsoft와 pyzbar는 안드로이드 빌드에서 문제가 될 수 있으므로 일단 제외
 # 필요시 OpenCV QRCodeDetector 사용 (android_qr_scanner.py에서 이미 구현됨)
-requirements = python3,kivy==2.2.1,camera4kivy,opencv,numpy,pillow,android,jnius
+requirements = python3,kivy==2.2.1,camera4kivy,opencv,numpy==1.24.3,pillow,android,jnius
 
 # (str) Custom source folders for requirements
 #requirements.source.kivy = ../../kivy

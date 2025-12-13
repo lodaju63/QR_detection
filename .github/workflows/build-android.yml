@@ -35,6 +35,7 @@ jobs:
           autoconf-archive \
           automake \
           libtool \
+          libtool-bin \
           libltdl-dev \
           gettext \
           pkg-config \
@@ -64,6 +65,12 @@ jobs:
         pip install -r requirements_android.txt
       env:
         PIP_BREAK_SYSTEM_PACKAGES: 1
+    
+    - name: Clean Buildozer cache
+      run: |
+        rm -rf .buildozer
+        rm -rf bin
+        echo "Buildozer cache cleaned"
     
     - name: Build Android APK
       timeout-minutes: 120
