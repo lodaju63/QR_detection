@@ -66,6 +66,13 @@ class QRScannerApp(App):
         self.last_decoded = None
         self.scanning = False
         
+        # 하드웨어 성능 극대화 옵션
+        self.torch_enabled = False  # 토치(플래시)
+        self.zoom_level = 1.0  # 줌 레벨 (1.0 = 기본)
+        self.focus_mode = 'continuous_video'  # 연속 오토포커스
+        self.macro_mode = False  # 매크로 모드
+        self.exposure_compensation = 0  # 노출 보정 (하드웨어)
+        
         # Dynamsoft 초기화
         if DBR_AVAILABLE:
             try:
@@ -132,6 +139,49 @@ class QRScannerApp(App):
         self.scan_btn.bind(on_press=self.toggle_scan)
         controls.add_widget(self.scan_btn)
         
+        # 🔦 토치(플래시) 버튼
+        self.torch_btn = ToggleButton(
+            text='🔦 토치 OFF',
+            size_hint_y=None,
+            height=40
+        )
+        self.torch_btn.bind(on_press=self.toggle_torch)
+        controls.add_widget(self.torch_btn)
+        
+        # 🎯 포커스 모드
+        focus_label = Label(text='포커스 모드', size_hint_y=None, height=30)
+        controls.add_widget(focus_label)
+        
+        focus_layout = BoxLayout(orientation='horizontal', size_hint_y=None, height=40)
+        self.focus_btn = ToggleButton(
+            text='연속 포커스',
+            size_hint_x=0.5,
+            state='down'
+        )
+        self.focus_btn.bind(on_press=self.toggle_focus_mode)
+        focus_layout.add_widget(self.focus_btn)
+        
+        self.macro_btn = ToggleButton(
+            text='매크로 모드',
+            size_hint_x=0.5
+        )
+        self.macro_btn.bind(on_press=self.toggle_macro)
+        focus_layout.add_widget(self.macro_btn)
+        controls.add_widget(focus_layout)
+        
+        # 🔍 하드웨어 줌
+        zoom_label = Label(text='🔍 하드웨어 줌', size_hint_y=None, height=30)
+        controls.add_widget(zoom_label)
+        
+        zoom_layout = BoxLayout(orientation='horizontal', size_hint_y=None, height=40)
+        zoom_layout.add_widget(Label(text='줌:', size_hint_x=0.2))
+        self.zoom_slider = Slider(min=1.0, max=10.0, value=1.0, size_hint_x=0.6)
+        self.zoom_slider.bind(value=self.update_zoom)
+        zoom_layout.add_widget(self.zoom_slider)
+        self.zoom_label = Label(text='1.0x', size_hint_x=0.2)
+        zoom_layout.add_widget(self.zoom_label)
+        controls.add_widget(zoom_layout)
+        
         # ROI 설정
         roi_label = Label(text='스캔 영역 (ROI)', size_hint_y=None, height=30)
         controls.add_widget(roi_label)
@@ -168,30 +218,35 @@ class QRScannerApp(App):
         roi_h_layout.add_widget(self.roi_h_slider)
         controls.add_widget(roi_h_layout)
         
-        # 카메라 설정
-        camera_settings_label = Label(text='카메라 설정', size_hint_y=None, height=30)
+        # 카메라 설정 (하드웨어 노출 제어)
+        camera_settings_label = Label(text='하드웨어 노출 제어', size_hint_y=None, height=30)
         controls.add_widget(camera_settings_label)
         
-        # 밝기 조정 (Android에서는 제한적)
+        # 노출 보정 (하드웨어)
+        exposure_layout = BoxLayout(orientation='horizontal', size_hint_y=None, height=40)
+        exposure_layout.add_widget(Label(text='노출:', size_hint_x=0.2))
+        self.exposure_slider = Slider(min=-2, max=2, value=0, size_hint_x=0.6)
+        self.exposure_slider.bind(value=self.update_exposure_hw)
+        exposure_layout.add_widget(self.exposure_slider)
+        controls.add_widget(exposure_layout)
+        
+        # 소프트웨어 후처리 (선택적)
+        postprocess_label = Label(text='소프트웨어 후처리', size_hint_y=None, height=30)
+        controls.add_widget(postprocess_label)
+        
+        # 밝기 조정 (소프트웨어)
         brightness_layout = BoxLayout(orientation='horizontal', size_hint_y=None, height=40)
         brightness_layout.add_widget(Label(text='밝기:', size_hint_x=0.2))
         self.brightness_slider = Slider(min=-1, max=1, value=0, size_hint_x=0.6)
         brightness_layout.add_widget(self.brightness_slider)
         controls.add_widget(brightness_layout)
         
-        # 대비 조정
+        # 대비 조정 (소프트웨어)
         contrast_layout = BoxLayout(orientation='horizontal', size_hint_y=None, height=40)
         contrast_layout.add_widget(Label(text='대비:', size_hint_x=0.2))
         self.contrast_slider = Slider(min=0.5, max=2.0, value=1.0, size_hint_x=0.6)
         contrast_layout.add_widget(self.contrast_slider)
         controls.add_widget(contrast_layout)
-        
-        # 노출 보정 (소프트웨어)
-        exposure_layout = BoxLayout(orientation='horizontal', size_hint_y=None, height=40)
-        exposure_layout.add_widget(Label(text='노출:', size_hint_x=0.2))
-        self.exposure_slider = Slider(min=-2, max=2, value=0, size_hint_x=0.6)
-        exposure_layout.add_widget(self.exposure_slider)
-        controls.add_widget(exposure_layout)
         
         layout.add_widget(controls)
         
@@ -205,9 +260,91 @@ class QRScannerApp(App):
     def toggle_camera(self, instance):
         """카메라 전환 (후면/앞면)"""
         self.camera_index = 1 - self.camera_index
-        self.camera_widget.index = self.camera_index
+        if CAMERA4KIVY_AVAILABLE:
+            self.camera_widget.disconnect_camera()
+            self.camera_widget.camera_id = str(self.camera_index)
+            self.camera_widget.connect_camera()
+        else:
+            self.camera_widget.index = self.camera_index
         instance.text = '앞면 카메라' if self.camera_index == 1 else '후면 카메라'
         Logger.info(f"Camera switched to index {self.camera_index}")
+    
+    def toggle_torch(self, instance):
+        """토치(플래시) 토글"""
+        self.torch_enabled = not self.torch_enabled
+        if CAMERA4KIVY_AVAILABLE:
+            try:
+                self.camera_widget.enable_torch(self.torch_enabled)
+                instance.text = '🔦 토치 ON' if self.torch_enabled else '🔦 토치 OFF'
+                Logger.info(f"Torch: {self.torch_enabled}")
+            except Exception as e:
+                Logger.warning(f"Torch control failed: {e}")
+        else:
+            instance.text = '🔦 토치 OFF (미지원)'
+    
+    def toggle_focus_mode(self, instance):
+        """포커스 모드 토글"""
+        if instance.state == 'down':
+            self.focus_mode = 'continuous_video'
+            self.macro_mode = False
+            self.macro_btn.state = 'normal'
+            Logger.info("Focus mode: continuous_video")
+        else:
+            self.focus_mode = 'auto'
+            Logger.info("Focus mode: auto")
+        
+        if CAMERA4KIVY_AVAILABLE:
+            try:
+                # Camera4Kivy의 포커스 모드 설정
+                if hasattr(self.camera_widget, 'set_focus_mode'):
+                    self.camera_widget.set_focus_mode(self.focus_mode)
+            except Exception as e:
+                Logger.warning(f"Focus mode setting failed: {e}")
+    
+    def toggle_macro(self, instance):
+        """매크로 모드 토글"""
+        self.macro_mode = (instance.state == 'down')
+        if self.macro_mode:
+            self.focus_mode = 'macro'
+            self.focus_btn.state = 'normal'
+            Logger.info("Focus mode: macro")
+        else:
+            self.focus_mode = 'continuous_video'
+            self.focus_btn.state = 'down'
+        
+        if CAMERA4KIVY_AVAILABLE:
+            try:
+                if hasattr(self.camera_widget, 'set_focus_mode'):
+                    self.camera_widget.set_focus_mode(self.focus_mode)
+            except Exception as e:
+                Logger.warning(f"Macro mode setting failed: {e}")
+    
+    def update_zoom(self, instance, value):
+        """하드웨어 줌 업데이트"""
+        self.zoom_level = value
+        self.zoom_label.text = f'{value:.1f}x'
+        
+        if CAMERA4KIVY_AVAILABLE:
+            try:
+                if hasattr(self.camera_widget, 'set_zoom'):
+                    self.camera_widget.set_zoom(value)
+                elif hasattr(self.camera_widget, 'zoom'):
+                    self.camera_widget.zoom = value
+                Logger.info(f"Zoom: {value}x")
+            except Exception as e:
+                Logger.warning(f"Zoom setting failed: {e}")
+    
+    def update_exposure_hw(self, instance, value):
+        """하드웨어 노출 보정"""
+        self.exposure_compensation = value
+        
+        if CAMERA4KIVY_AVAILABLE:
+            try:
+                if hasattr(self.camera_widget, 'set_exposure_compensation'):
+                    self.camera_widget.set_exposure_compensation(int(value * 10))  # -20 to +20
+                Logger.info(f"Exposure compensation: {value}")
+            except Exception as e:
+                Logger.warning(f"Exposure setting failed: {e}")
     
     def toggle_scan(self, instance):
         """스캔 시작/정지"""
@@ -364,8 +501,15 @@ class QRScannerApp(App):
     
     def on_stop(self):
         """앱 종료 시"""
-        if self.camera_widget:
-            self.camera_widget.play = False
+        if CAMERA4KIVY_AVAILABLE:
+            if self.camera_widget:
+                try:
+                    self.camera_widget.disconnect_camera()
+                except:
+                    pass
+        else:
+            if self.camera_widget:
+                self.camera_widget.play = False
 
 
 if __name__ == '__main__':

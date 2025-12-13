@@ -39,7 +39,7 @@ version = 0.1
 
 # (list) Application requirements
 # comma separated e.g. requirements = sqlite3,kivy
-requirements = python3,kivy==2.1.0,opencv-python-headless,numpy,pyzbar,dynamsoft-barcode-reader-bundle
+requirements = python3,kivy==2.1.0,camera4kivy,opencv-python-headless,numpy,pyzbar,dynamsoft-barcode-reader-bundle
 
 # (str) Custom source folders for requirements
 #requirements.source.kivy = ../../kivy
