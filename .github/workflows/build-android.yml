@@ -64,7 +64,6 @@ jobs:
       timeout-minutes: 120
       run: |
         source venv/bin/activate
-        buildozer android debug 2>&1 | grep -v "^\[DEBUG\]:" | grep -v "^\[INFO\]:" || true
         buildozer android debug
       env:
         APP_ANDROID_ACCEPT_SDK_LICENSE: 1
