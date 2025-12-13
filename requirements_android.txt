@@ -1,12 +1,12 @@
 # Android QR Scanner Requirements
-# ✅ 중요: opencv-python-headless 대신 opencv 레시피 사용
+# ✅ 중요: requirements_android.txt는 pip install용이므로 opencv-python-headless 사용
+# ✅ 중요: buildozer.spec에서는 opencv 레시피 사용 (p4a)
 # ✅ 중요: android, jnius 추가 (Camera4Kivy 필수)
 kivy==2.2.1
 camera4kivy>=0.1.0
-opencv
+opencv-python-headless==4.9.0.80
 numpy==1.24.3
-pillow
+pillow==10.2.0
 pyzbar==0.1.9
 dynamsoft-barcode-reader-bundle>=11.0.0
-android
-jnius
+# android와 jnius는 buildozer가 자동으로 포함하므로 여기서는 제외
