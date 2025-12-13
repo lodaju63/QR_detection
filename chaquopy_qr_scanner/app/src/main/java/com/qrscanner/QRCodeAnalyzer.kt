@@ -59,7 +59,10 @@ class QRCodeAnalyzer(
                         
                         // Dynamsoft Android SDK는 decodeBufferedImage 사용
                         val results = barcodeReader?.decodeBufferedImage(bitmap)
-                        android.util.Log.d("QRCodeAnalyzer", "Decode attempt #$attemptCount, results: ${results?.size ?: 0}, bitmap size: ${bitmap.width}x${bitmap.height}")
+                        val logMsg = "시도 #$attemptCount | 결과: ${results?.size ?: 0}개 | 이미지: ${bitmap.width}x${bitmap.height}"
+                        android.util.Log.d("QRCodeAnalyzer", logMsg)
+                        // UI에도 로그 표시
+                        onDecodeAttempt?.invoke(attemptCount, false)
                         
                         var hasResult = false
                         if (results != null && results.isNotEmpty()) {

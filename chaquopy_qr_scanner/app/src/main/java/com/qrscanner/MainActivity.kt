@@ -124,8 +124,28 @@ class MainActivity : AppCompatActivity() {
                     it.setAnalyzer(cameraExecutor, QRCodeAnalyzer(barcodeReader, python, { text ->
                         runOnUiThread {
                             resultText.text = "QR: $text"
+                            resultText.setTextColor(Color.GREEN)
+                            debugText.text = "✅ 해독 성공! (시도: $decodeAttemptCount)"
+                            debugText.setTextColor(Color.GREEN)
+                            decodeAttemptCount = 0
                         }
-                    }, roiRect))
+                    }, roiRect) { attemptCount, hasResult ->
+                        runOnUiThread {
+                            decodeAttemptCount = attemptCount
+                            val currentTime = System.currentTimeMillis()
+                            val fps = if (currentTime - lastDecodeTime > 0 && lastDecodeTime > 0) {
+                                1000 / (currentTime - lastDecodeTime)
+                            } else {
+                                0
+                            }
+                            lastDecodeTime = currentTime
+                            
+                            if (!hasResult) {
+                                debugText.text = "🔍 스캔 중... (시도: $attemptCount, FPS: $fps)"
+                                debugText.setTextColor(Color.YELLOW)
+                            }
+                        }
+                    })
                 }
 
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
@@ -174,42 +194,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupROIBorder() {
-        // ROI 영역 테두리 그리기
-        val path = Path()
-        val strokeWidth = 4f
-        val cornerLength = 40f
-        
+        // ROI 영역 전체 테두리 그리기 (반투명 배경 + 테두리)
         roiBorder.post {
             val width = roiBorder.width.toFloat()
             val height = roiBorder.height.toFloat()
             
-            // 왼쪽 위 모서리
-            path.moveTo(0f, cornerLength)
-            path.lineTo(0f, 0f)
-            path.lineTo(cornerLength, 0f)
-            
-            // 오른쪽 위 모서리
-            path.moveTo(width - cornerLength, 0f)
-            path.lineTo(width, 0f)
-            path.lineTo(width, cornerLength)
-            
-            // 오른쪽 아래 모서리
-            path.moveTo(width, height - cornerLength)
-            path.lineTo(width, height)
-            path.lineTo(width - cornerLength, height)
-            
-            // 왼쪽 아래 모서리
-            path.moveTo(cornerLength, height)
-            path.lineTo(0f, height)
-            path.lineTo(0f, height - cornerLength)
+            // 전체 사각형 테두리
+            val path = Path()
+            path.addRect(0f, 0f, width, height, Path.Direction.CW)
             
             val shapeDrawable = ShapeDrawable(PathShape(path, width, height))
             val paint = shapeDrawable.paint
             paint.color = Color.GREEN
             paint.style = Paint.Style.STROKE
-            paint.strokeWidth = strokeWidth
+            paint.strokeWidth = 6f
             paint.isAntiAlias = true
             
+            // 배경은 반투명 (XML에서 설정했지만 여기서도 확인)
             roiBorder.background = shapeDrawable
         }
     }
