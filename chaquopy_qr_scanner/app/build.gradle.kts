@@ -69,7 +69,7 @@ dependencies {
     implementation("androidx.camera:camera-view:1.3.0")
     
     // ✅ [핵심 수정] Dynamsoft Barcode Reader
-    implementation("com.dynamsoft:barcodereaderbundle:9.6.20")
+    implementation("com.dynamsoft:dynamsoftbarcodereader:9.6.20")
     
     // Lifecycle
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
