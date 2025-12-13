@@ -21,6 +21,15 @@ android {
         ndk {
             abiFilters += listOf("armeabi-v7a", "arm64-v8a")
         }
+        
+        python {
+            version("3.10")
+            pip {
+                install("opencv-python-headless==4.9.0.80")
+                install("numpy")
+                install("pillow")
+            }
+        }
     }
 
     buildTypes {
@@ -40,17 +49,6 @@ android {
     
     kotlinOptions {
         jvmTarget = "1.8"
-    }
-}
-
-chaquopy {
-    defaultConfig {
-        version = "3.10"
-        pip {
-            install("opencv-python-headless==4.9.0.80")
-            install("numpy")
-            install("pillow")
-        }
     }
 }
 
