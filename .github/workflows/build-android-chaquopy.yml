@@ -38,9 +38,16 @@ jobs:
           mkdir -p gradle/wrapper
           curl -L https://raw.githubusercontent.com/gradle/gradle/v8.2.0/gradle/wrapper/gradle-wrapper.jar -o gradle/wrapper/gradle-wrapper.jar
         fi
+        # gradlew 파일이 없으면 다운로드
+        if [ ! -f "gradlew" ]; then
+          curl -L https://raw.githubusercontent.com/gradle/gradle/v8.2.0/gradlew -o gradlew
+          chmod +x gradlew
+        fi
         # 윈도우 줄바꿈(\r) 제거 (핵심!)
-        sed -i 's/\r$//' gradlew
-        chmod +x gradlew
+        if [ -f "gradlew" ]; then
+          sed -i 's/\r$//' gradlew
+          chmod +x gradlew
+        fi
         chmod +x gradle/wrapper/gradle-wrapper.jar || true
     
     - name: Setup Gradle
