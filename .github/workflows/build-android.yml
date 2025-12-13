@@ -21,8 +21,10 @@ jobs:
       with:
         command: buildozer android debug
         buildozer_version: stable
+        workdir: .
       env:
         APP_ANDROID_ACCEPT_SDK_LICENSE: 1
+        USER: root
     
     - name: Upload Android artifact
       uses: actions/upload-artifact@v4
