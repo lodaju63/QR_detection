@@ -73,16 +73,25 @@ class MainActivity : AppCompatActivity() {
         // Dynamsoft 초기화 (9.x 버전: 정적 메서드 사용)
         BarcodeReader.initLicense("t0085YQEAADYdcL2llMa8vH1Rtnun+43saE/kdAE7ZbIxMQGRMtSzVSZRI8vfOK4Ids52rjekwzh87yABFLraXw5Va1BV7NnBjI8m7qbw3kxOprI75ExJpw==", object : DBRLicenseVerificationListener {
             override fun DBRLicenseVerificationCallback(isSuccess: Boolean, error: Exception?) {
-                if (isSuccess) {
-                    try {
-                        barcodeReader = BarcodeReader()
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                        Toast.makeText(this@MainActivity, "Dynamsoft 초기화 실패", Toast.LENGTH_SHORT).show()
+                runOnUiThread {
+                    if (isSuccess) {
+                        try {
+                            barcodeReader = BarcodeReader()
+                            debugText.text = "✅ Dynamsoft 초기화 완료\n카메라 시작 중..."
+                            debugText.setTextColor(Color.GREEN)
+                            android.util.Log.d("MainActivity", "Dynamsoft 초기화 성공")
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                            debugText.text = "❌ Dynamsoft 초기화 실패: ${e.message}"
+                            debugText.setTextColor(Color.RED)
+                            Toast.makeText(this@MainActivity, "Dynamsoft 초기화 실패", Toast.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        error?.printStackTrace()
+                        debugText.text = "❌ 라이선스 검증 실패: ${error?.message ?: "알 수 없는 오류"}"
+                        debugText.setTextColor(Color.RED)
+                        Toast.makeText(this@MainActivity, "Dynamsoft 라이선스 검증 실패", Toast.LENGTH_SHORT).show()
                     }
-                } else {
-                    error?.printStackTrace()
-                    Toast.makeText(this@MainActivity, "Dynamsoft 라이선스 검증 실패", Toast.LENGTH_SHORT).show()
                 }
             }
         })
@@ -145,14 +154,16 @@ class MainActivity : AppCompatActivity() {
                             lastDecodeTime = currentTime
                             
                             if (!hasResult) {
-                                // 로그를 누적하여 표시 (최대 5줄)
-                                val existingText = debugText.text.toString()
-                                val newLog = "시도 #$attemptCount | FPS: $fps | ROI: ${roiRect?.width()}x${roiRect?.height()}"
-                                val lines = existingText.split("\n").filter { it.isNotEmpty() && !it.startsWith("🔍") && !it.startsWith("시도") && !it.startsWith("FPS") && !it.startsWith("[로그]") }
-                                val logLines = (lines.takeLast(3) + newLog).takeLast(4)
-                                val logText = "🔍 스캔 중...\n시도: $attemptCount | FPS: $fps\n\n[로그]\n${logLines.joinToString("\n")}"
+                                // 간단하고 명확한 로그 표시
+                                val roiInfo = if (roiRect != null) "${roiRect.width()}x${roiRect.height()}" else "계산중"
+                                val logText = "🔍 스캔 중...\n\n시도: $attemptCount\nFPS: $fps\nROI: $roiInfo\n\n[상태] QR 코드 대기 중"
                                 debugText.text = logText
                                 debugText.setTextColor(Color.YELLOW)
+                                
+                                // 주기적으로 로그 출력 (매 10번째 시도마다)
+                                if (attemptCount % 10 == 0) {
+                                    android.util.Log.d("MainActivity", "Scan attempt #$attemptCount, FPS: $fps, ROI: $roiInfo")
+                                }
                             }
                         }
                     })
@@ -169,8 +180,16 @@ class MainActivity : AppCompatActivity() {
                     imageCapture,
                     imageAnalyzer
                 )
+                runOnUiThread {
+                    debugText.text = "✅ 카메라 시작 완료\nQR 코드를 스캔하세요..."
+                    debugText.setTextColor(Color.GREEN)
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
+                runOnUiThread {
+                    debugText.text = "❌ 카메라 시작 실패: ${e.message}"
+                    debugText.setTextColor(Color.RED)
+                }
                 Toast.makeText(this, "카메라 시작 실패: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }, ContextCompat.getMainExecutor(this))

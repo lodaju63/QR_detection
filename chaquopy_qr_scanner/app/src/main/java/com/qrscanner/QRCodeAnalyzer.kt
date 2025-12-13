@@ -62,9 +62,6 @@ class QRCodeAnalyzer(
                         val logMsg = "시도 #$attemptCount | 결과: ${results?.size ?: 0}개 | 이미지: ${bitmap.width}x${bitmap.height}"
                         android.util.Log.d("QRCodeAnalyzer", logMsg)
                         
-                        // UI 콜백 호출 (매 프레임마다)
-                        onDecodeAttempt?.invoke(attemptCount, false)
-                        
                         var hasResult = false
                         if (results != null && results.isNotEmpty()) {
                             for (result in results) {
