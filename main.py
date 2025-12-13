@@ -437,12 +437,22 @@ class AnalysisWorker(QThread):
                 # 1. 전처리
                 processed_frame = self._apply_preprocessing(frame)
 
-                # 2. YOLO 탐지
-                detections = self._detect_qr_codes(processed_frame)
+                # 2. YOLO 탐지 (듀얼 패스: 원본 + 전처리)
+                detections_orig = self._detect_qr_codes(frame)  # 원본 프레임으로 탐지
+                detections_prep = self._detect_qr_codes(processed_frame)  # 전처리 프레임으로 탐지
+                
+                # 3. 결과 합치기 및 중복 제거
+                all_detections = detections_orig + detections_prep
+                detections = self._merge_detections(all_detections)
 
-                # 3. Dynamsoft 해독
+                # 4. Dynamsoft 해독 (원본과 전처리 모두에서 시도)
                 for det in detections:
-                    self._decode_qr_code(processed_frame, det)
+                    # 원본 프레임에서 먼저 시도
+                    if not det.get('success', False):
+                        self._decode_qr_code(frame, det)
+                    # 실패하면 전처리 프레임에서 시도
+                    if not det.get('success', False):
+                        self._decode_qr_code(processed_frame, det)
 
                 # 4. 분석 지표 계산
                 metrics = self._calculate_metrics(processed_frame, detections)
@@ -452,7 +462,7 @@ class AnalysisWorker(QThread):
                 metrics['has_success'] = any(d.get('success', False) for d in detections)
                 metrics['fps'] = fps
 
-                # 5. 결과 전송
+                # 6. 결과 전송
                 self.result_ready.emit(frame_idx, detections, metrics)
             except Exception as e:
                 print(f"[AnalysisWorker] 분석 오류: {e}")
@@ -529,6 +539,42 @@ class AnalysisWorker(QThread):
             print(f"[AnalysisWorker] YOLO 탐지 오류: {e}")
             
         return detections
+    
+    def _merge_detections(self, detections: List[Dict]) -> List[Dict]:
+        """중복 탐지 결과 병합 (NMS 유사 로직)"""
+        if not detections:
+            return []
+        
+        # 신뢰도가 높은 순으로 정렬
+        sorted_detections = sorted(detections, key=lambda x: x['confidence'], reverse=True)
+        merged = []
+        
+        for det in sorted_detections:
+            is_duplicate = False
+            bx1, by1, bx2, by2 = det['bbox']
+            b_center = det['center']
+            b_area = det['area']
+            
+            # 이미 추가된 박스와 비교
+            for existing in merged:
+                ex1, ey1, ex2, ey2 = existing['bbox']
+                e_center = existing['center']
+                e_area = existing['area']
+                
+                # 중심점 거리 계산
+                center_dist = np.sqrt((b_center[0] - e_center[0])**2 + (b_center[1] - e_center[1])**2)
+                
+                # 중심점이 가까우면 (박스 크기의 30% 이내) 중복으로 간주
+                threshold = min(b_area, e_area) ** 0.5 * 0.3
+                
+                if center_dist < threshold:
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                merged.append(det)
+        
+        return merged
     
     def _decode_qr_code(self, frame: np.ndarray, detection: Dict):
         """Dynamsoft로 QR 코드 해독"""
