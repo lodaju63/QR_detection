@@ -38,36 +38,12 @@ class QRCodeAnalyzer(
                     }
                     
                     // 방법 2: Python (OpenCV)로 QR 코드 읽기 (fallback)
-                    try {
-                        val yBuffer = mediaImage.planes[0].buffer
-                        val uBuffer = mediaImage.planes[1].buffer
-                        val vBuffer = mediaImage.planes[2].buffer
-                        
-                        val ySize = yBuffer.remaining()
-                        val uSize = uBuffer.remaining()
-                        val vSize = vBuffer.remaining()
-                        
-                        val nv21 = ByteArray(ySize + uSize + vSize)
-                        yBuffer.get(nv21, 0, ySize)
-                        vBuffer.get(nv21, ySize, vSize)
-                        uBuffer.get(nv21, ySize + vSize, uSize)
-                        
-                        // Python으로 전달
-                        python?.let { py ->
-                            val qrUtils = py.getModule("qr_utils")
-                            val numpy = py.getModule("numpy")
-                            
-                            // YUV to BGR 변환 (Python에서 처리)
-                            val imageArray = numpy.callAttr("frombuffer", nv21, "uint8")
-                            val decoded = qrUtils.callAttr("decode_qr_opencv", imageArray)
-                            
-                            if (decoded != null && decoded.toString().isNotEmpty()) {
-                                onResult(decoded.toString())
-                            }
-                        }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
+                    // 주의: YUV 이미지를 Python으로 전달하는 것은 복잡하므로
+                    // 일단 Dynamsoft만 사용하고, 필요시 추가 구현
+                    // python?.let { py ->
+                    //     val qrUtils = py.getModule("qr_utils")
+                    //     // 이미지 변환 후 Python 함수 호출
+                    // }
                 }
             }
         }
