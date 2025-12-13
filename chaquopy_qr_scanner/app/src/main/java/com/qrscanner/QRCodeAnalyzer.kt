@@ -53,8 +53,8 @@ class QRCodeAnalyzer(
                             }
                         }
                         
-                        // Dynamsoft Android SDK는 decodeBitmap 사용
-                        val results = barcodeReader?.decodeBitmap(bitmap)
+                        // Dynamsoft Android SDK는 decodeBufferedImage 사용
+                        val results = barcodeReader?.decodeBufferedImage(bitmap)
                         android.util.Log.d("QRCodeAnalyzer", "Decode results: ${results?.size ?: 0}")
                         if (results != null && results.isNotEmpty()) {
                             for (result in results) {
