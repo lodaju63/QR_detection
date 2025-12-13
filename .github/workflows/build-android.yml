@@ -15,22 +15,75 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: Build with Buildozer
-      uses: ArtemSBulgakov/buildozer-action@v1
-      id: buildozer
+    - name: Clean git config
+      run: |
+        git config --global --unset http.https://github.com/.extraheader || true
+    
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          git \
+          unzip \
+          openjdk-11-jdk \
+          autoconf \
+          libtool \
+          pkg-config \
+          zlib1g-dev \
+          libncurses5-dev \
+          libncursesw5-dev \
+          libtinfo6 \
+          cmake \
+          libffi-dev \
+          libssl-dev \
+          python3-pip \
+          python3-venv
+    
+    - name: Create virtual environment
+      run: |
+        python3 -m venv venv
+        source venv/bin/activate
+        pip install --upgrade pip
+        pip install buildozer cython
       env:
         PIP_BREAK_SYSTEM_PACKAGES: 1
+    
+    - name: Install Python dependencies
+      run: |
+        source venv/bin/activate
+        pip install -r requirements_android.txt
+      env:
+        PIP_BREAK_SYSTEM_PACKAGES: 1
+    
+    - name: Build Android APK
+      timeout-minutes: 120
+      run: |
+        source venv/bin/activate
+        buildozer android debug 2>&1 | grep -v "^\[DEBUG\]:" | grep -v "^\[INFO\]:" || true
+        buildozer android debug
+      env:
         APP_ANDROID_ACCEPT_SDK_LICENSE: 1
-        USER: root
-      with:
-        command: buildozer android debug
-        buildozer_version: stable
-        workdir: .
+        PIP_BREAK_SYSTEM_PACKAGES: 1
+    
+    - name: Check build result
+      run: |
+        if ls bin/*.apk 1> /dev/null 2>&1; then
+          echo "✅ Android build successful!"
+          ls -lh bin/*.apk
+        else
+          echo "❌ Build failed!"
+          exit 1
+        fi
     
     - name: Upload Android artifact
       uses: actions/upload-artifact@v4
       with:
         name: QR_Analyzer_Android
-        path: ${{ steps.buildozer.outputs.filename }}
+        path: bin/*.apk
         retention-days: 7
         compression-level: 6
