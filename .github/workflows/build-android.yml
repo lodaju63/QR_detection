@@ -82,7 +82,7 @@ jobs:
         export ANDROID_NDK_ROOT=""
         export ANDROID_NDK_LATEST_HOME=""
         # REST API 버전 빌드 (빌드 문제 없음!)
-        buildozer -s buildozer_rest.spec android debug
+        buildozer --config=buildozer_rest.spec android debug
       env:
         APP_ANDROID_ACCEPT_SDK_LICENSE: 1
         PIP_BREAK_SYSTEM_PACKAGES: 1
