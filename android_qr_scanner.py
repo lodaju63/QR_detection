@@ -90,13 +90,26 @@ class QRScannerApp(App):
         # UI 구성
         layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
         
-        # 카메라 뷰
-        self.camera_widget = Camera(
-            index=self.camera_index,
-            resolution=(640, 480),
-            play=True
-        )
-        self.camera_widget.bind(on_texture=self.on_camera_frame)
+        # 카메라 뷰 (Camera4Kivy 사용)
+        if CAMERA4KIVY_AVAILABLE:
+            self.camera_widget = Preview(
+                camera_id=str(self.camera_index),
+                analyze_pixels_resolution=640,  # 분석 해상도
+                enable_analyze_pixels=True,
+                enable_video=False  # 비디오 녹화 안 함 (성능 확보)
+            )
+            # 분석 콜백 연결 (Camera4Kivy 방식)
+            self.camera_widget.analyze_pixels_resolution_percent = 100
+            # analyze_fun은 on_start에서 연결
+        else:
+            # PC 테스트용 기본 카메라 (기능 제한됨)
+            self.camera_widget = Camera(
+                index=self.camera_index,
+                resolution=(640, 480),
+                play=True
+            )
+            self.camera_widget.bind(on_texture=self.on_camera_frame)
+        
         layout.add_widget(self.camera_widget)
         
         # ROI 표시용 레이블 (오버레이)
@@ -257,13 +270,128 @@ class QRScannerApp(App):
         
         return scroll
     
+    def on_start(self):
+        """앱 시작 시 권한 요청 및 카메라 연결"""
+        from kivy.utils import platform
+        
+        # Android 권한 요청
+        if platform == 'android':
+            try:
+                from android.permissions import request_permissions, Permission
+                request_permissions([
+                    Permission.CAMERA,
+                    Permission.WRITE_EXTERNAL_STORAGE,
+                ])
+                Logger.info("Android permissions requested")
+            except Exception as e:
+                Logger.warning(f"Permission request failed: {e}")
+        
+        # Camera4Kivy 카메라 연결 및 분석 콜백 설정
+        if CAMERA4KIVY_AVAILABLE:
+            try:
+                # analyze_fun 콜백 연결
+                self.camera_widget.analyze_pixels_callback = self.analyze_frame_wrapper
+                # 카메라 연결
+                self.camera_widget.connect_camera(enable_video=False)
+                Logger.info("Camera4Kivy connected")
+            except Exception as e:
+                Logger.error(f"Camera4Kivy connection failed: {e}")
+    
+    def analyze_frame_wrapper(self, image_proxy):
+        """Camera4Kivy 분석 콜백 - ImageProxy를 받아서 처리"""
+        if not self.scanning:
+            return
+        
+        try:
+            # ImageProxy를 OpenCV 이미지로 변환
+            frame = self.image_proxy_to_opencv(image_proxy)
+            if frame is None:
+                return
+            
+            # ROI 영역 추출 (하드웨어 최적화: 가운데 영역만 분석)
+            h, w = frame.shape[:2]
+            roi_x1 = int(self.roi_x * w)
+            roi_y1 = int(self.roi_y * h)
+            roi_x2 = int((self.roi_x + self.roi_width) * w)
+            roi_y2 = int((self.roi_y + self.roi_height) * h)
+            
+            roi = frame[roi_y1:roi_y2, roi_x1:roi_x2]
+            
+            if roi.size == 0:
+                return
+            
+            # 소프트웨어 후처리
+            roi = self._apply_postprocessing(roi)
+            
+            # QR 코드 해독
+            decoded_text = self.decode_qr(roi)
+            
+            if decoded_text and decoded_text != self.last_decoded:
+                self.last_decoded = decoded_text
+                self.result_label.text = f'✅ 해독 성공:\n{decoded_text[:50]}'
+                Logger.info(f"QR decoded: {decoded_text}")
+        
+        except Exception as e:
+            Logger.error(f"Frame analysis error: {e}")
+    
+    def image_proxy_to_opencv(self, image_proxy):
+        """ImageProxy를 OpenCV numpy 배열로 변환"""
+        try:
+            # Camera4Kivy의 ImageProxy 처리
+            # ImageProxy는 Android의 ImageProxy 객체
+            if hasattr(image_proxy, 'get_planes'):
+                # YUV 포맷 처리
+                planes = image_proxy.get_planes()
+                if len(planes) > 0:
+                    # Y 채널 가져오기
+                    y_plane = planes[0]
+                    y_buffer = y_plane.get_buffer()
+                    y_bytes = bytearray(y_buffer.remaining())
+                    y_buffer.get(y_bytes)
+                    
+                    # 해상도 가져오기
+                    width = image_proxy.get_width()
+                    height = image_proxy.get_height()
+                    
+                    # Y 채널을 numpy 배열로 변환
+                    y_array = np.frombuffer(y_bytes, dtype=np.uint8)
+                    y_array = y_array.reshape((height, width))
+                    
+                    # 그레이스케일을 BGR로 변환 (QR 인식용)
+                    frame = cv2.cvtColor(y_array, cv2.COLOR_GRAY2BGR)
+                    return frame
+            
+            # 대안: RGB 포맷 처리
+            if hasattr(image_proxy, 'get_format'):
+                # 직접 픽셀 데이터 접근 시도
+                try:
+                    from jnius import autoclass
+                    ByteBuffer = autoclass('java.nio.ByteBuffer')
+                    ImageFormat = autoclass('android.graphics.ImageFormat')
+                    
+                    # ImageProxy에서 직접 픽셀 데이터 가져오기
+                    # (구현은 Camera4Kivy 문서 참조)
+                    pass
+                except:
+                    pass
+            
+            Logger.warning("Could not convert ImageProxy to OpenCV")
+            return None
+            
+        except Exception as e:
+            Logger.error(f"ImageProxy conversion error: {e}")
+            return None
+    
     def toggle_camera(self, instance):
         """카메라 전환 (후면/앞면)"""
         self.camera_index = 1 - self.camera_index
         if CAMERA4KIVY_AVAILABLE:
-            self.camera_widget.disconnect_camera()
-            self.camera_widget.camera_id = str(self.camera_index)
-            self.camera_widget.connect_camera()
+            try:
+                self.camera_widget.disconnect_camera()
+                self.camera_widget.camera_id = str(self.camera_index)
+                self.camera_widget.connect_camera(enable_video=False)
+            except Exception as e:
+                Logger.error(f"Camera switch failed: {e}")
         else:
             self.camera_widget.index = self.camera_index
         instance.text = '앞면 카메라' if self.camera_index == 1 else '후면 카메라'
@@ -274,11 +402,16 @@ class QRScannerApp(App):
         self.torch_enabled = not self.torch_enabled
         if CAMERA4KIVY_AVAILABLE:
             try:
-                self.camera_widget.enable_torch(self.torch_enabled)
+                # Camera4Kivy의 토치 제어
+                if hasattr(self.camera_widget, 'enable_torch'):
+                    self.camera_widget.enable_torch(self.torch_enabled)
+                elif hasattr(self.camera_widget, 'torch'):
+                    self.camera_widget.torch = self.torch_enabled
                 instance.text = '🔦 토치 ON' if self.torch_enabled else '🔦 토치 OFF'
                 Logger.info(f"Torch: {self.torch_enabled}")
             except Exception as e:
                 Logger.warning(f"Torch control failed: {e}")
+                instance.text = '🔦 토치 (오류)'
         else:
             instance.text = '🔦 토치 OFF (미지원)'
     
@@ -406,25 +539,8 @@ class QRScannerApp(App):
             if roi.size == 0:
                 return
             
-            # 카메라 설정 적용 (소프트웨어 처리)
-            brightness = self.brightness_slider.value
-            contrast = self.contrast_slider.value
-            exposure = self.exposure_slider.value
-            
-            # 밝기 조정
-            if brightness != 0:
-                roi = cv2.convertScaleAbs(roi, alpha=1, beta=brightness * 50)
-            
-            # 대비 조정
-            if contrast != 1.0:
-                roi = cv2.convertScaleAbs(roi, alpha=contrast, beta=0)
-            
-            # 노출 보정 (간단한 감마 조정)
-            if exposure != 0:
-                gamma = 1.0 + exposure * 0.5
-                inv_gamma = 1.0 / gamma
-                table = np.array([((i / 255.0) ** inv_gamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
-                roi = cv2.LUT(roi, table)
+            # 소프트웨어 후처리
+            roi = self._apply_postprocessing(roi)
             
             # QR 코드 해독
             decoded_text = self.decode_qr(roi)
@@ -499,14 +615,29 @@ class QRScannerApp(App):
         
         return None
     
+    def _apply_postprocessing(self, roi):
+        """소프트웨어 후처리 적용"""
+        # 밝기 조정
+        brightness = self.brightness_slider.value
+        if brightness != 0:
+            roi = cv2.convertScaleAbs(roi, alpha=1, beta=brightness * 50)
+        
+        # 대비 조정
+        contrast = self.contrast_slider.value
+        if contrast != 1.0:
+            roi = cv2.convertScaleAbs(roi, alpha=contrast, beta=0)
+        
+        return roi
+    
     def on_stop(self):
         """앱 종료 시"""
         if CAMERA4KIVY_AVAILABLE:
             if self.camera_widget:
                 try:
                     self.camera_widget.disconnect_camera()
-                except:
-                    pass
+                    Logger.info("Camera4Kivy disconnected")
+                except Exception as e:
+                    Logger.warning(f"Camera disconnect error: {e}")
         else:
             if self.camera_widget:
                 self.camera_widget.play = False
