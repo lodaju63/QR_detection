@@ -32,13 +32,13 @@
         android:layout_height="0dp"
         android:background="#40FFFFFF"
         android:layout_marginTop="60dp"
-        android:layout_marginStart="15%"
-        android:layout_marginEnd="15%"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintBottom_toTopOf="@id/debugText"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintDimensionRatio="1:1" />
+        app:layout_constraintDimensionRatio="1:1"
+        app:layout_constraintWidth_default="percent"
+        app:layout_constraintWidth_percent="0.7" />
     
     <!-- 해독 결과 표시용 오버레이 (하단에 고정) -->
     <TextView

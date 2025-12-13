@@ -45,12 +45,14 @@ class MainActivity : AppCompatActivity() {
         roiBorder = findViewById(R.id.roiBorder)
         debugText = findViewById(R.id.debugText)
         
-        // ROI 영역 테두리 설정
-        setupROIBorder()
-        
         // 디버그 텍스트 표시 (개발 중)
         debugText.visibility = android.view.View.VISIBLE
         resultText.setTextColor(Color.WHITE)
+        
+        // ROI 영역 테두리 설정 (레이아웃 완료 후)
+        previewView.post {
+            setupROIBorder()
+        }
 
         // Python 초기화
         if (!Python.isStarted()) {
