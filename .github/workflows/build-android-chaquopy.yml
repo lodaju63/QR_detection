@@ -54,10 +54,14 @@ jobs:
       run: |
         # Gradle wrapper 확인
         ls -la gradle/wrapper/ || true
-        # 줄바꿈 다시 확인 및 수정
+        # 줄바꿈 강제 변환 (여러 방법 시도)
         sed -i 's/\r$//' gradlew
-        # 빌드 실행 (bash로 명시적 실행)
-        bash -c "./gradlew assembleDebug --no-daemon"
+        tr -d '\r' < gradlew > gradlew.tmp && mv gradlew.tmp gradlew
+        chmod +x gradlew
+        # gradlew 파일 헤더 확인
+        head -1 gradlew
+        # 빌드 실행
+        ./gradlew assembleDebug --no-daemon
     
     - name: Check build result
       working-directory: ./chaquopy_qr_scanner
