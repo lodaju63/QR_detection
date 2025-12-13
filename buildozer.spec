@@ -133,6 +133,10 @@ android.debug_artifact = apk
 # (str) The directory in which python-for-android should look for your own build modules (if any)
 #p4a.local_modules =
 
+# p4a 옵션 추가: 최신 빌드 도구 사용 강제
+p4a.branch = develop
+p4a.bootstrap = sdl2
+
 #
 # iOS specific
 #
