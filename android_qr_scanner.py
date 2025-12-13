@@ -87,14 +87,15 @@ class QRScannerApp(App):
             except Exception as e:
                 Logger.warning(f"Dynamsoft init failed: {e}")
         
-        # UI 구성
-        layout = BoxLayout(orientation='vertical', padding=10, spacing=10)
+        # UI 구성 - FloatLayout으로 전체 화면 카메라 + 오버레이 컨트롤
+        from kivy.uix.floatlayout import FloatLayout
+        layout = FloatLayout()
         
-        # 카메라 뷰 (Camera4Kivy 사용)
+        # 카메라 뷰 (전체 화면)
         if CAMERA4KIVY_AVAILABLE:
             self.camera_widget = Preview(
                 camera_id=str(self.camera_index),
-                analyze_pixels_resolution=640,  # 분석 해상도
+                analyze_pixels_resolution=640,  # 분석 해상도 (성능 최적화)
                 enable_analyze_pixels=True,
                 enable_video=False  # 비디오 녹화 안 함 (성능 확보)
             )
@@ -110,26 +111,56 @@ class QRScannerApp(App):
             )
             self.camera_widget.bind(on_texture=self.on_camera_frame)
         
+        # 카메라를 전체 화면으로
+        self.camera_widget.size_hint = (1, 1)
+        self.camera_widget.pos_hint = {'x': 0, 'y': 0}
         layout.add_widget(self.camera_widget)
         
-        # ROI 표시용 레이블 (오버레이)
-        self.roi_label = Label(
-            text='',
-            size_hint=(None, None),
-            size=(200, 50),
-            pos_hint={'center_x': 0.5, 'y': 0.9}
+        # 상단 오버레이: ROI 표시 및 결과
+        top_overlay = BoxLayout(
+            orientation='vertical',
+            size_hint=(1, None),
+            height=120,
+            pos_hint={'x': 0, 'top': 1},
+            padding=10,
+            spacing=5
         )
-        layout.add_widget(self.roi_label)
+        
+        # ROI 표시용 레이블 (반투명 배경)
+        from kivy.graphics import Color, Rectangle
+        with top_overlay.canvas.before:
+            Color(0, 0, 0, 0.5)  # 반투명 검은색
+            self.roi_bg = Rectangle(pos=top_overlay.pos, size=top_overlay.size)
+        
+        self.roi_label = Label(
+            text='ROI: (0.2, 0.2) 0.6x0.6',
+            size_hint=(1, None),
+            height=30,
+            color=(1, 1, 1, 1),
+            text_size=(None, None),
+            halign='center'
+        )
+        top_overlay.add_widget(self.roi_label)
         
         # 결과 표시
         self.result_label = Label(
             text='QR 코드를 스캔하세요',
-            size_hint_y=None,
+            size_hint=(1, None),
             height=60,
+            color=(1, 1, 1, 1),
             text_size=(None, None),
-            halign='center'
+            halign='center',
+            valign='middle'
         )
-        layout.add_widget(self.result_label)
+        top_overlay.add_widget(self.result_label)
+        
+        # 상단 오버레이 바인딩 (크기 변경 시 배경 업데이트)
+        def update_roi_bg(instance, value):
+            self.roi_bg.pos = instance.pos
+            self.roi_bg.size = instance.size
+        top_overlay.bind(pos=update_roi_bg, size=update_roi_bg)
+        
+        layout.add_widget(top_overlay)
         
         # 컨트롤 패널
         controls = BoxLayout(orientation='vertical', size_hint_y=None, height=400, spacing=5)
@@ -151,15 +182,6 @@ class QRScannerApp(App):
         )
         self.scan_btn.bind(on_press=self.toggle_scan)
         controls.add_widget(self.scan_btn)
-        
-        # 🔦 토치(플래시) 버튼
-        self.torch_btn = ToggleButton(
-            text='🔦 토치 OFF',
-            size_hint_y=None,
-            height=40
-        )
-        self.torch_btn.bind(on_press=self.toggle_torch)
-        controls.add_widget(self.torch_btn)
         
         # 🎯 포커스 모드
         focus_label = Label(text='포커스 모드', size_hint_y=None, height=30)
@@ -261,14 +283,38 @@ class QRScannerApp(App):
         contrast_layout.add_widget(self.contrast_slider)
         controls.add_widget(contrast_layout)
         
-        layout.add_widget(controls)
+        controls_scroll.add_widget(controls)
+        self.controls_panel.add_widget(controls_scroll)
+        layout.add_widget(self.controls_panel)
         
-        # 스크롤 가능하도록
-        from kivy.uix.scrollview import ScrollView
-        scroll = ScrollView()
-        scroll.add_widget(layout)
+        # 설정 버튼 (하단 중앙, 컨트롤 패널 토글)
+        self.settings_btn = Button(
+            text='⚙️',
+            size_hint=(None, None),
+            size=(60, 60),
+            pos_hint={'center_x': 0.5, 'y': 0.02}
+        )
+        self.settings_btn.bind(on_press=self.toggle_controls)
+        layout.add_widget(self.settings_btn)
         
-        return scroll
+        return layout
+    
+    def toggle_controls(self, instance):
+        """컨트롤 패널 표시/숨김 토글"""
+        self.controls_visible = not self.controls_visible
+        
+        if self.controls_visible:
+            # 컨트롤 패널 표시 (애니메이션)
+            from kivy.animation import Animation
+            anim = Animation(height=400, duration=0.3)
+            anim.start(self.controls_panel)
+            instance.text = '✕'
+        else:
+            # 컨트롤 패널 숨김
+            from kivy.animation import Animation
+            anim = Animation(height=0, duration=0.3)
+            anim.start(self.controls_panel)
+            instance.text = '⚙️'
     
     def on_start(self):
         """앱 시작 시 권한 요청 및 카메라 연결"""
@@ -482,7 +528,7 @@ class QRScannerApp(App):
     def toggle_scan(self, instance):
         """스캔 시작/정지"""
         self.scanning = not self.scanning
-        instance.text = '스캔 정지' if self.scanning else '스캔 시작'
+        instance.text = '⏸️ 정지' if self.scanning else '▶️ 스캔'
         if not self.scanning:
             self.result_label.text = 'QR 코드를 스캔하세요'
             self.last_decoded = None
