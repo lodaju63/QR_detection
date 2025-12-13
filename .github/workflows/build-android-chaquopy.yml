@@ -7,6 +7,11 @@ on:
       - 'chaquopy_qr_scanner/**'
   workflow_dispatch:
 
+# 중복 빌드 방지: 같은 브랜치의 동시 빌드는 취소
+concurrency:
+  group: build-android-chaquopy-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-android:
     runs-on: ubuntu-latest
