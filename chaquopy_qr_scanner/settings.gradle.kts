@@ -17,7 +17,7 @@ dependencyResolutionManagement {
             url = uri("https://chaquo.com/maven")
         }
         maven {
-            url = uri("https://download2.dynamsoft.com/maven")
+            url = uri("https://download2.dynamsoft.com/maven/aar")
         }
     }
 }
