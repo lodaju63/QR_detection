@@ -55,7 +55,7 @@ jobs:
         python3 -m venv venv
         source venv/bin/activate
         pip install --upgrade pip
-        pip install buildozer cython
+        pip install buildozer "cython<3.0"
       env:
         PIP_BREAK_SYSTEM_PACKAGES: 1
     
@@ -72,7 +72,7 @@ jobs:
         rm -rf bin
         echo "Buildozer cache cleaned"
     
-    - name: Build Android APK
+    - name: Build Android APK (REST API Version)
       timeout-minutes: 120
       run: |
         source venv/bin/activate
@@ -81,7 +81,8 @@ jobs:
         export ANDROID_NDK_HOME=""
         export ANDROID_NDK_ROOT=""
         export ANDROID_NDK_LATEST_HOME=""
-        buildozer android debug
+        # REST API 버전 빌드 (빌드 문제 없음!)
+        buildozer -s buildozer_rest.spec android debug
       env:
         APP_ANDROID_ACCEPT_SDK_LICENSE: 1
         PIP_BREAK_SYSTEM_PACKAGES: 1
@@ -103,7 +104,7 @@ jobs:
     - name: Upload Android artifact
       uses: actions/upload-artifact@v4
       with:
-        name: QR_Analyzer_Android
+        name: QR_Analyzer_Android_REST
         path: bin/*.apk
         retention-days: 7
         compression-level: 6
