@@ -48,6 +48,7 @@ jobs:
         name: QR_Analyzer_Windows
         path: dist/QR_Analyzer.exe
         retention-days: 7
+        compression-level: 6
 
   build-mac:
     runs-on: macos-latest
@@ -105,13 +106,13 @@ jobs:
     
     steps:
     - name: Download Windows artifact
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v5
       with:
         name: QR_Analyzer_Windows
         path: windows
     
     - name: Download Mac artifact
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v5
       with:
         name: QR_Analyzer_Mac
         path: mac

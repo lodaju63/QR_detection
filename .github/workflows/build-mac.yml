@@ -60,5 +60,6 @@ jobs:
           dist/QR_Analyzer.app
           dist/QR_Analyzer.dmg
         retention-days: 7
+        compression-level: 6
 
 
