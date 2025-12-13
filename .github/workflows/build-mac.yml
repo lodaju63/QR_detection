@@ -2,9 +2,9 @@ name: Build Mac App
 
 on:
   push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
+    branches: [ main, master, feat/PyQt6 ]
+    pull_request:
+    branches: [ main, master, feat/PyQt6 ]
   workflow_dispatch:  # 수동 실행 가능
 
 jobs:

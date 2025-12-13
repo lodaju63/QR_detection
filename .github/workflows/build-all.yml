@@ -2,7 +2,7 @@ name: Build All Platforms
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, feat/PyQt6 ]
     tags:
       - 'v*'
   workflow_dispatch:
