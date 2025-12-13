@@ -17,8 +17,11 @@ class QRCodeAnalyzer(
     private val barcodeReader: BarcodeReader?,
     private val python: Python?,
     private val onResult: (String) -> Unit,
-    private val roiRect: android.graphics.Rect? = null
+    private val roiRect: android.graphics.Rect? = null,
+    private val onDecodeAttempt: ((Int, Boolean) -> Unit)? = null
 ) : ImageAnalysis.Analyzer {
+    
+    private var attemptCount = 0
 
     override fun analyze(imageProxy: ImageProxy) {
         val mediaImage = imageProxy.image

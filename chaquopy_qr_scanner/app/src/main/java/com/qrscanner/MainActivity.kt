@@ -32,6 +32,9 @@ class MainActivity : AppCompatActivity() {
     private var python: Python? = null
     private lateinit var resultText: TextView
     private lateinit var roiBorder: View
+    private lateinit var debugText: TextView
+    private var decodeAttemptCount = 0
+    private var lastDecodeTime = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
