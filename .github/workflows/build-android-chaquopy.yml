@@ -6,6 +6,8 @@ on:
     branches: [ main, master, feat/PyQt6 ]
     paths:
       - 'chaquopy_qr_scanner/**'
+      - '.github/workflows/build-android-chaquopy.yml'
+      - '.gitattributes'
   workflow_dispatch:
 
 # 중복 빌드 방지: 같은 브랜치의 동시 빌드는 취소
