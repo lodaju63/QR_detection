@@ -48,7 +48,8 @@ chaquopy {
     defaultConfig {
         version = "3.8"  // Python 3.8로 변경 (3.10은 패키지 호환성 문제)
         pip {
-            install("opencv-python-headless==4.9.0.80")
+            // opencv-python-headless는 빌드 문제로 제거 (Android에서는 Dynamsoft SDK 사용)
+            // install("opencv-python-headless==4.9.0.80")
             install("numpy")
             install("pillow")
         }
