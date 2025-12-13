@@ -2,13 +2,15 @@ package com.qrscanner
 
 import android.graphics.ImageFormat
 import android.graphics.Bitmap
-import android.graphics.ImageDecoder
+import android.graphics.BitmapFactory
+import android.media.Image
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import com.dynamsoft.dbr.BarcodeReader
 import com.dynamsoft.dbr.TextResult
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
+import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 
 class QRCodeAnalyzer(
@@ -51,5 +53,27 @@ class QRCodeAnalyzer(
             }
         }
         imageProxy.close()
+    }
+    
+    private fun mediaImageToBitmap(mediaImage: Image): Bitmap {
+        val yBuffer = mediaImage.planes[0].buffer
+        val uBuffer = mediaImage.planes[1].buffer
+        val vBuffer = mediaImage.planes[2].buffer
+        
+        val ySize = yBuffer.remaining()
+        val uSize = uBuffer.remaining()
+        val vSize = vBuffer.remaining()
+        
+        val nv21 = ByteArray(ySize + uSize + vSize)
+        
+        yBuffer.get(nv21, 0, ySize)
+        vBuffer.get(nv21, ySize, vSize)
+        uBuffer.get(nv21, ySize + vSize, uSize)
+        
+        val yuvImage = android.graphics.YuvImage(nv21, ImageFormat.NV21, mediaImage.width, mediaImage.height, null)
+        val out = java.io.ByteArrayOutputStream()
+        yuvImage.compressToJpeg(android.graphics.Rect(0, 0, mediaImage.width, mediaImage.height), 100, out)
+        val imageBytes = out.toByteArray()
+        return android.graphics.BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
     }
 }
