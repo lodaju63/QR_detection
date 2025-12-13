@@ -64,6 +64,11 @@ jobs:
       timeout-minutes: 120
       run: |
         source venv/bin/activate
+        # Unset conflicting Android NDK environment variables
+        unset ANDROID_NDK
+        unset ANDROID_NDK_HOME
+        unset ANDROID_NDK_ROOT
+        unset ANDROID_NDK_LATEST_HOME
         buildozer android debug
       env:
         APP_ANDROID_ACCEPT_SDK_LICENSE: 1
