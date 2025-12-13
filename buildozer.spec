@@ -12,6 +12,9 @@ package.domain = com.qrscanner
 # (str) Source code where the main.py live
 source.dir = .
 
+# (str) Main entry point
+source.main = android_qr_scanner.py
+
 # (list) Source files to include (let empty to include all the files)
 source.include_exts = py,png,jpg,kv,atlas
 
