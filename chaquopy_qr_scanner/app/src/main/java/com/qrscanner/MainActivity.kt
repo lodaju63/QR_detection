@@ -31,6 +31,7 @@ class MainActivity : AppCompatActivity() {
     private var barcodeReader: BarcodeReader? = null
     private var python: Python? = null
     private lateinit var resultText: TextView
+    private lateinit var roiBorder: View
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -157,6 +158,47 @@ class MainActivity : AppCompatActivity() {
         cameraExecutor.shutdown()
         // Dynamsoft 9.x에서는 destroy() 메서드가 private이므로 제거
         // barcodeReader?.destroy()
+    }
+
+    private fun setupROIBorder() {
+        // ROI 영역 테두리 그리기
+        val path = Path()
+        val strokeWidth = 4f
+        val cornerLength = 40f
+        
+        roiBorder.post {
+            val width = roiBorder.width.toFloat()
+            val height = roiBorder.height.toFloat()
+            
+            // 왼쪽 위 모서리
+            path.moveTo(0f, cornerLength)
+            path.lineTo(0f, 0f)
+            path.lineTo(cornerLength, 0f)
+            
+            // 오른쪽 위 모서리
+            path.moveTo(width - cornerLength, 0f)
+            path.lineTo(width, 0f)
+            path.lineTo(width, cornerLength)
+            
+            // 오른쪽 아래 모서리
+            path.moveTo(width, height - cornerLength)
+            path.lineTo(width, height)
+            path.lineTo(width - cornerLength, height)
+            
+            // 왼쪽 아래 모서리
+            path.moveTo(cornerLength, height)
+            path.lineTo(0f, height)
+            path.lineTo(0f, height - cornerLength)
+            
+            val shapeDrawable = ShapeDrawable(PathShape(path, width, height))
+            val paint = shapeDrawable.paint
+            paint.color = Color.GREEN
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = strokeWidth
+            paint.isAntiAlias = true
+            
+            roiBorder.background = shapeDrawable
+        }
     }
 
     companion object {

@@ -21,7 +21,7 @@ class QRCodeAnalyzer(
 
     override fun analyze(imageProxy: ImageProxy) {
         val mediaImage = imageProxy.image
-        if (mediaImage != null) {
+        if (mediaImage != null && barcodeReader != null) {
             when (mediaImage.format) {
                 ImageFormat.YUV_420_888 -> {
                     // 방법 1: Dynamsoft로 QR 코드 읽기 (우선)
