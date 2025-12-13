@@ -149,7 +149,8 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
-        barcodeReader?.destroy()
+        // Dynamsoft 9.x에서는 destroy() 메서드가 private이므로 제거
+        // barcodeReader?.destroy()
     }
 
     companion object {
