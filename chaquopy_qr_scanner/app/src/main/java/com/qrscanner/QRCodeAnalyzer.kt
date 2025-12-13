@@ -30,6 +30,7 @@ class QRCodeAnalyzer(
                 ImageFormat.YUV_420_888 -> {
                     // 방법 1: Dynamsoft로 QR 코드 읽기 (우선)
                     try {
+                        attemptCount++
                         var bitmap = mediaImageToBitmap(mediaImage)
                         
                         // ROI 영역이 지정되어 있으면 해당 영역만 추출
@@ -52,27 +53,37 @@ class QRCodeAnalyzer(
                                     roiBottom - roiTop
                                 )
                                 bitmap = roiBitmap
-                                android.util.Log.d("QRCodeAnalyzer", "Using ROI: ${roiRight - roiLeft}x${roiBottom - roiTop}")
+                                android.util.Log.d("QRCodeAnalyzer", "Using ROI: ${roiRight - roiLeft}x${roiBottom - roiTop} from ${bitmap.width}x${bitmap.height}")
                             }
                         }
                         
                         // Dynamsoft Android SDK는 decodeBufferedImage 사용
                         val results = barcodeReader?.decodeBufferedImage(bitmap)
-                        android.util.Log.d("QRCodeAnalyzer", "Decode results: ${results?.size ?: 0}")
+                        android.util.Log.d("QRCodeAnalyzer", "Decode attempt #$attemptCount, results: ${results?.size ?: 0}, bitmap size: ${bitmap.width}x${bitmap.height}")
+                        
+                        var hasResult = false
                         if (results != null && results.isNotEmpty()) {
                             for (result in results) {
                                 val text = result.barcodeText
-                                android.util.Log.d("QRCodeAnalyzer", "Found barcode: $text")
+                                android.util.Log.d("QRCodeAnalyzer", "Found barcode: $text, format: ${result.barcodeFormatString}")
                                 if (text != null && text.isNotEmpty()) {
+                                    hasResult = true
                                     onResult(text)
+                                    onDecodeAttempt?.invoke(attemptCount, true)
+                                    attemptCount = 0
                                     imageProxy.close()
                                     return
                                 }
                             }
                         }
+                        
+                        // 해독 시도 결과 콜백 (성공하지 못한 경우)
+                        onDecodeAttempt?.invoke(attemptCount, false)
+                        
                     } catch (e: Exception) {
-                        android.util.Log.e("QRCodeAnalyzer", "Decode error", e)
+                        android.util.Log.e("QRCodeAnalyzer", "Decode error at attempt #$attemptCount", e)
                         e.printStackTrace()
+                        onDecodeAttempt?.invoke(attemptCount, false)
                     }
                     
                     // 방법 2: Python (OpenCV)로 QR 코드 읽기 (fallback)
