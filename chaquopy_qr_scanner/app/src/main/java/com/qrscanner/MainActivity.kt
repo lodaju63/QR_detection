@@ -108,11 +108,12 @@ class MainActivity : AppCompatActivity() {
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
                 .also {
-                    it.setAnalyzer(cameraExecutor, QRCodeAnalyzer(barcodeReader, python) { text ->
+                    val roiRect = calculateROIRect()
+                    it.setAnalyzer(cameraExecutor, QRCodeAnalyzer(barcodeReader, python, { text ->
                         runOnUiThread {
                             resultText.text = "QR: $text"
                         }
-                    })
+                    }, roiRect))
                 }
 
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
@@ -198,6 +199,31 @@ class MainActivity : AppCompatActivity() {
             paint.isAntiAlias = true
             
             roiBorder.background = shapeDrawable
+        }
+    }
+    
+    private fun calculateROIRect(): android.graphics.Rect? {
+        // ROI 영역 계산 (화면 중앙 80% 영역)
+        return try {
+            val margin = 40 // dp를 픽셀로 변환 (대략)
+            val displayMetrics = resources.displayMetrics
+            val marginPx = (margin * displayMetrics.density).toInt()
+            
+            val screenWidth = previewView.width
+            val screenHeight = previewView.height
+            
+            if (screenWidth > 0 && screenHeight > 0) {
+                android.graphics.Rect(
+                    marginPx,
+                    marginPx,
+                    screenWidth - marginPx,
+                    screenHeight - marginPx
+                )
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            null
         }
     }
 
