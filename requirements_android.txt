@@ -1,0 +1,7 @@
+# Android QR Scanner Requirements
+kivy==2.1.0
+opencv-python-headless==4.9.0.80
+numpy==1.24.3
+pyzbar==0.1.9
+dynamsoft-barcode-reader-bundle>=11.0.0
+Pillow==10.2.0
