@@ -13,8 +13,8 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
-import com.dynamsoft.barcode.BarcodeReader
-import com.dynamsoft.barcode.BarcodeReaderException
+import com.dynamsoft.dbr.BarcodeReader
+import com.dynamsoft.dbr.DBRLicenseVerificationListener
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -47,14 +47,22 @@ class MainActivity : AppCompatActivity() {
             android.util.Log.e("MainActivity", "Failed to load Python module", e)
         }
 
-        // Dynamsoft 초기화
-        try {
-            barcodeReader = BarcodeReader()
-            barcodeReader?.license = "t0085YQEAADYdcL2llMa8vH1Rtnun+43saE/kdAE7ZbIxMQGRMtSzVSZRI8vfOK4Ids52rjekwzh87yABFLraXw5Va1BV7NnBjI8m7qbw3kxOprI75ExJpw=="
-        } catch (e: BarcodeReaderException) {
-            e.printStackTrace()
-            Toast.makeText(this, "Dynamsoft 초기화 실패", Toast.LENGTH_SHORT).show()
-        }
+        // Dynamsoft 초기화 (9.x 버전: 정적 메서드 사용)
+        BarcodeReader.initLicense("t0085YQEAADYdcL2llMa8vH1Rtnun+43saE/kdAE7ZbIxMQGRMtSzVSZRI8vfOK4Ids52rjekwzh87yABFLraXw5Va1BV7NnBjI8m7qbw3kxOprI75ExJpw==", object : DBRLicenseVerificationListener {
+            override fun DBRLicenseVerificationCallback(isSuccess: Boolean, error: Exception?) {
+                if (isSuccess) {
+                    try {
+                        barcodeReader = BarcodeReader()
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        Toast.makeText(this@MainActivity, "Dynamsoft 초기화 실패", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    error?.printStackTrace()
+                    Toast.makeText(this@MainActivity, "Dynamsoft 라이선스 검증 실패", Toast.LENGTH_SHORT).show()
+                }
+            }
+        })
 
         // 권한 확인
         if (allPermissionsGranted()) {

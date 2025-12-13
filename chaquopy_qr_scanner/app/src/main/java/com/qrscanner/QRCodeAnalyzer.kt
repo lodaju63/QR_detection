@@ -5,8 +5,8 @@ import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
-import com.dynamsoft.barcode.BarcodeReader
-import com.dynamsoft.barcode.BarcodeReaderException
+import com.dynamsoft.dbr.BarcodeReader
+import com.dynamsoft.dbr.TextResult
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import java.nio.ByteBuffer
@@ -24,16 +24,19 @@ class QRCodeAnalyzer(
                 ImageFormat.YUV_420_888 -> {
                     // 방법 1: Dynamsoft로 QR 코드 읽기 (우선)
                     try {
-                        val results = barcodeReader?.decodeBufferedImage(mediaImage)
-                        results?.forEach { result ->
-                            val text = result.barcodeText
-                            if (text.isNotEmpty()) {
-                                onResult(text)
-                                imageProxy.close()
-                                return
+                        val bitmap = mediaImageToBitmap(mediaImage)
+                        val results = barcodeReader?.decodeBufferedImage(bitmap)
+                        if (results != null && results.isNotEmpty()) {
+                            for (result in results) {
+                                val text = result.barcodeText
+                                if (text.isNotEmpty()) {
+                                    onResult(text)
+                                    imageProxy.close()
+                                    return
+                                }
                             }
                         }
-                    } catch (e: BarcodeReaderException) {
+                    } catch (e: Exception) {
                         e.printStackTrace()
                     }
                     
