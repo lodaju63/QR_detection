@@ -38,6 +38,14 @@ class MainActivity : AppCompatActivity() {
             Python.start(AndroidPlatform(this))
         }
         python = Python.getInstance()
+        
+        // Python 모듈 테스트
+        try {
+            val qrUtils = python?.getModule("qr_utils")
+            Logger.d("MainActivity", "Python module loaded: $qrUtils")
+        } catch (e: Exception) {
+            Logger.e("MainActivity", "Failed to load Python module", e)
+        }
 
         // Dynamsoft 초기화
         try {
