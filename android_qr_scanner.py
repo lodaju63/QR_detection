@@ -51,6 +51,16 @@ try:
 except ImportError:
     DBR_AVAILABLE = False
 
+# Camera4Kivy 확인 (하드웨어 가속 카메라)
+CAMERA4KIVY_AVAILABLE = False
+try:
+    from camera4kivy import Preview
+    CAMERA4KIVY_AVAILABLE = True
+    Logger.info("Camera4Kivy found - hardware acceleration enabled")
+except ImportError:
+    # Fallback: 기본 Kivy Camera (기능 제한됨)
+    Logger.warning("Camera4Kivy not found. Using default Camera (limited features).")
+
 
 class QRScannerApp(App):
     """QR 스캐너 메인 앱"""
@@ -338,17 +348,26 @@ class QRScannerApp(App):
         contrast_layout.add_widget(self.contrast_slider)
         controls.add_widget(contrast_layout)
         
-        # 위젯 조립 (변수들이 모두 정의된 후)
-        controls_scroll.add_widget(controls)
+        # --- [수정된 조립 로직] ---
+        
+        # 1. 스크롤 뷰 생성
+        from kivy.uix.scrollview import ScrollView
+        controls_scroll = ScrollView(size_hint=(1, 1))
+        controls_scroll.add_widget(controls)  # 컨트롤 박스를 스크롤뷰에 넣음
+        
+        # 2. 하단 패널 컨테이너 (애니메이션용)에 스크롤뷰 넣기
         self.controls_panel.add_widget(controls_scroll)
+        
+        # 3. 전체 레이아웃에 패널 넣기
         layout.add_widget(self.controls_panel)
         
-        # 설정 버튼 (하단 중앙, 컨트롤 패널 토글)
+        # 4. 설정 버튼 (맨 위에 그려지도록 마지막에 추가)
         self.settings_btn = Button(
             text='⚙️',
             size_hint=(None, None),
             size=(60, 60),
-            pos_hint={'center_x': 0.5, 'y': 0.02}
+            pos_hint={'center_x': 0.5, 'y': 0.02},
+            background_color=(0, 0, 0, 0.5)  # 반투명 버튼
         )
         self.settings_btn.bind(on_press=self.toggle_controls)
         layout.add_widget(self.settings_btn)
