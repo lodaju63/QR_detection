@@ -25,7 +25,7 @@ version = 0.1
 # ✅ Dynamsoft REST API 버전: 순수 Python만 사용 (빌드 문제 없음!)
 # ✅ opencv-python-headless는 pip install용 (GitHub Actions)
 # ✅ buildozer에서는 opencv 레시피 사용
-requirements = python3,kivy==2.2.1,camera4kivy,opencv,numpy==1.24.3,pillow,android,jnius
+requirements = python3,kivy==2.2.1,camera4kivy,opencv,numpy,pillow,android,jnius
 
 # (str) Supported orientation (one of landscape, sensorLandscape, portrait or all)
 orientation = portrait
