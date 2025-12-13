@@ -2,7 +2,13 @@ package com.qrscanner
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.drawable.ShapeDrawable
+import android.graphics.drawable.shapes.PathShape
 import android.os.Bundle
+import android.view.View
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity

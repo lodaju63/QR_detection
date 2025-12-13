@@ -27,11 +27,12 @@ class QRCodeAnalyzer(
                     // 방법 1: Dynamsoft로 QR 코드 읽기 (우선)
                     try {
                         val bitmap = mediaImageToBitmap(mediaImage)
-                        val results = barcodeReader?.decodeBufferedImage(bitmap)
+                        // Dynamsoft Android SDK는 decodeBitmap 사용
+                        val results = barcodeReader?.decodeBitmap(bitmap)
                         if (results != null && results.isNotEmpty()) {
                             for (result in results) {
                                 val text = result.barcodeText
-                                if (text.isNotEmpty()) {
+                                if (text != null && text.isNotEmpty()) {
                                     onResult(text)
                                     imageProxy.close()
                                     return
@@ -39,6 +40,7 @@ class QRCodeAnalyzer(
                             }
                         }
                     } catch (e: Exception) {
+                        android.util.Log.e("QRCodeAnalyzer", "Decode error", e)
                         e.printStackTrace()
                     }
                     
