@@ -27,13 +27,13 @@ OPENCV_QR_AVAILABLE = False
 qr_detector = None
 
 try:
-    from pyzbar import pyzbar
+    from pyzbar.pyzbar import decode as pyzbar_decode
     PYZBAR_AVAILABLE = True
+    pyzbar = type('obj', (object,), {'decode': pyzbar_decode})
 except ImportError:
     try:
-        from pyzbar.pyzbar import decode as pyzbar_decode
+        from pyzbar import pyzbar
         PYZBAR_AVAILABLE = True
-        pyzbar = type('obj', (object,), {'decode': pyzbar_decode})
     except ImportError:
         PYZBAR_AVAILABLE = False
         Logger.warning("pyzbar not available, trying OpenCV QRCodeDetector")
