@@ -162,8 +162,63 @@ class QRScannerApp(App):
         
         layout.add_widget(top_overlay)
         
-        # 컨트롤 패널
-        controls = BoxLayout(orientation='vertical', size_hint_y=None, height=400, spacing=5)
+        # 하단 컨트롤 패널 초기화 (BottomSheet 스타일)
+        self.controls_visible = False  # 플래그 초기화
+        
+        # 패널 컨테이너 생성 (애니메이션을 위해 높이 0으로 시작)
+        self.controls_panel = BoxLayout(
+            orientation='vertical',
+            size_hint=(1, None),
+            height=0,  # 처음에는 숨김 상태
+            pos_hint={'x': 0, 'y': 0},
+            padding=10,
+            spacing=5
+        )
+        
+        # 컨트롤 패널 배경
+        with self.controls_panel.canvas.before:
+            Color(0, 0, 0, 0.8)  # 반투명 검은색
+            self.controls_bg = Rectangle(pos=self.controls_panel.pos, size=self.controls_panel.size)
+        
+        def update_controls_bg(instance, value):
+            self.controls_bg.pos = instance.pos
+            self.controls_bg.size = instance.size
+        self.controls_panel.bind(pos=update_controls_bg, size=update_controls_bg)
+        
+        # 스크롤 가능한 컨트롤 영역
+        from kivy.uix.scrollview import ScrollView
+        controls_scroll = ScrollView(size_hint=(1, 1))
+        controls = BoxLayout(orientation='vertical', size_hint_y=None, spacing=5)
+        controls.bind(minimum_height=controls.setter('height'))
+        
+        # 빠른 액세스 버튼 (항상 보이는 상단 버튼들)
+        quick_actions = BoxLayout(orientation='horizontal', size_hint_y=None, height=50, spacing=5)
+        
+        # 카메라 전환 버튼
+        camera_btn = ToggleButton(
+            text='📷',
+            size_hint_x=0.25
+        )
+        camera_btn.bind(on_press=self.toggle_camera)
+        quick_actions.add_widget(camera_btn)
+        
+        # 스캔 시작/정지 버튼
+        self.scan_btn = Button(
+            text='▶️ 스캔',
+            size_hint_x=0.5
+        )
+        self.scan_btn.bind(on_press=self.toggle_scan)
+        quick_actions.add_widget(self.scan_btn)
+        
+        # 🔦 토치(플래시) 버튼
+        self.torch_btn = ToggleButton(
+            text='🔦',
+            size_hint_x=0.25
+        )
+        self.torch_btn.bind(on_press=self.toggle_torch)
+        quick_actions.add_widget(self.torch_btn)
+        
+        controls.add_widget(quick_actions)
         
         # 카메라 전환 버튼
         camera_btn = ToggleButton(
@@ -283,6 +338,7 @@ class QRScannerApp(App):
         contrast_layout.add_widget(self.contrast_slider)
         controls.add_widget(contrast_layout)
         
+        # 위젯 조립 (변수들이 모두 정의된 후)
         controls_scroll.add_widget(controls)
         self.controls_panel.add_widget(controls_scroll)
         layout.add_widget(self.controls_panel)
