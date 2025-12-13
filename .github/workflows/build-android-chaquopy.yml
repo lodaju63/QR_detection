@@ -35,10 +35,20 @@ jobs:
       with:
         gradle-version: 8.2
     
+    - name: Setup Gradle Wrapper
+      working-directory: ./chaquopy_qr_scanner
+      run: |
+        # Gradle wrapper jar가 없으면 생성
+        if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
+          mkdir -p gradle/wrapper
+          curl -L https://raw.githubusercontent.com/gradle/gradle/v8.2.0/gradle/wrapper/gradle-wrapper.jar -o gradle/wrapper/gradle-wrapper.jar
+        fi
+        chmod +x gradlew
+        chmod +x gradle/wrapper/gradle-wrapper.jar || true
+    
     - name: Build with Gradle
       working-directory: ./chaquopy_qr_scanner
       run: |
-        chmod +x gradlew
         ./gradlew assembleDebug --no-daemon
     
     - name: Check build result
