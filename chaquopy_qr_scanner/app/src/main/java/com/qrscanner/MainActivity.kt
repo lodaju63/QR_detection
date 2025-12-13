@@ -50,8 +50,7 @@ class MainActivity : AppCompatActivity() {
         // Dynamsoft 초기화
         try {
             barcodeReader = BarcodeReader()
-            // TODO: 실제 라이선스 키로 교체
-            barcodeReader?.license = "YOUR_DYNAMSOFT_LICENSE_KEY"
+            barcodeReader?.license = "t0085YQEAADYdcL2llMa8vH1Rtnun+43saE/kdAE7ZbIxMQGRMtSzVSZRI8vfOK4Ids52rjekwzh87yABFLraXw5Va1BV7NnBjI8m7qbw3kxOprI75ExJpw=="
         } catch (e: BarcodeReaderException) {
             e.printStackTrace()
             Toast.makeText(this, "Dynamsoft 초기화 실패", Toast.LENGTH_SHORT).show()
