@@ -39,6 +39,10 @@ class MainActivity : AppCompatActivity() {
 
         previewView = findViewById(R.id.previewView)
         resultText = findViewById(R.id.resultText)
+        roiBorder = findViewById(R.id.roiBorder)
+        
+        // ROI 영역 테두리 설정
+        setupROIBorder()
 
         // Python 초기화
         if (!Python.isStarted()) {

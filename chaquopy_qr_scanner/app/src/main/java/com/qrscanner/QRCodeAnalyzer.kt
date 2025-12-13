@@ -27,9 +27,35 @@ class QRCodeAnalyzer(
                 ImageFormat.YUV_420_888 -> {
                     // 방법 1: Dynamsoft로 QR 코드 읽기 (우선)
                     try {
-                        val bitmap = mediaImageToBitmap(mediaImage)
+                        var bitmap = mediaImageToBitmap(mediaImage)
+                        
+                        // ROI 영역이 지정되어 있으면 해당 영역만 추출
+                        if (roiRect != null && roiRect.width() > 0 && roiRect.height() > 0) {
+                            // ROI 좌표를 이미지 크기에 맞게 조정
+                            val scaleX = bitmap.width.toFloat() / imageProxy.width.toFloat()
+                            val scaleY = bitmap.height.toFloat() / imageProxy.height.toFloat()
+                            
+                            val roiLeft = (roiRect.left * scaleX).toInt().coerceAtLeast(0)
+                            val roiTop = (roiRect.top * scaleY).toInt().coerceAtLeast(0)
+                            val roiRight = (roiRect.right * scaleX).toInt().coerceAtMost(bitmap.width)
+                            val roiBottom = (roiRect.bottom * scaleY).toInt().coerceAtMost(bitmap.height)
+                            
+                            if (roiRight > roiLeft && roiBottom > roiTop) {
+                                val roiBitmap = Bitmap.createBitmap(
+                                    bitmap,
+                                    roiLeft,
+                                    roiTop,
+                                    roiRight - roiLeft,
+                                    roiBottom - roiTop
+                                )
+                                bitmap = roiBitmap
+                                android.util.Log.d("QRCodeAnalyzer", "Using ROI: ${roiRight - roiLeft}x${roiBottom - roiTop}")
+                            }
+                        }
+                        
                         // Dynamsoft Android SDK는 decodeBitmap 사용
                         val results = barcodeReader?.decodeBitmap(bitmap)
+                        android.util.Log.d("QRCodeAnalyzer", "Decode results: ${results?.size ?: 0}")
                         if (results != null && results.isNotEmpty()) {
                             for (result in results) {
                                 val text = result.barcodeText
