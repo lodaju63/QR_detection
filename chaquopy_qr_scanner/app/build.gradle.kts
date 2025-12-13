@@ -43,13 +43,14 @@ android {
     }
 }
 
-python {
-    version("3.10")
-    
-    pip {
-        install("opencv-python-headless==4.9.0.80")
-        install("numpy")
-        install("pillow")
+chaquopy {
+    defaultConfig {
+        version = "3.10"
+        pip {
+            install("opencv-python-headless==4.9.0.80")
+            install("numpy")
+            install("pillow")
+        }
     }
 }
 
