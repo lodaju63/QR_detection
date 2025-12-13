@@ -47,6 +47,8 @@ class MainActivity : AppCompatActivity() {
         
         // 디버그 텍스트 표시 (개발 중)
         debugText.visibility = android.view.View.VISIBLE
+        debugText.text = "⏳ 초기화 중...\n카메라를 시작합니다."
+        debugText.setTextColor(Color.WHITE)
         resultText.setTextColor(Color.WHITE)
         
         // ROI 영역 테두리 설정 (레이아웃 완료 후)
