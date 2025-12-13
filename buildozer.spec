@@ -94,7 +94,8 @@ android.permissions = CAMERA,INTERNET,FLASHLIGHT,WRITE_EXTERNAL_STORAGE,RECORD_A
 android.api = 33
 
 # (int) Minimum API your APK will support.
-android.minapi = 21
+# ✅ 중요: numpy 빌드를 위해 최소 API 24 필요
+android.minapi = 24
 
 # (str) Android NDK version to use
 android.ndk = 25b
