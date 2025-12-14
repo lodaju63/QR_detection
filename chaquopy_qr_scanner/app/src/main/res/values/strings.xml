@@ -1,4 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">QR Scanner</string>
+    <!-- 
+    ⚠️ 중요: Mobile용 라이선스 키가 필요합니다!
+    현재 라이선스 키는 Desktop/Server/Embedded용이므로 Android에서 작동하지 않습니다.
+    
+    Mobile용 라이선스 키 발급 방법:
+    1. https://www.dynamsoft.com/customer/ 에 로그인
+    2. 라이선스 관리에서 Mobile 플랫폼 추가 또는 Mobile용 라이선스 키 발급
+    3. 아래에 Mobile용 라이선스 키를 입력하세요
+    -->
+    <string name="dynamsoft_license_key">t0089pwAAAElBAr4MsYvHTN9tnerSpfBp0z7MvJu/SptdHkueUjT8m1Nfe7AltCjLjDpuOJO60gF/GHY00ZNo3NnYOpUBoYWDb3UqPsCfa6PNjb/yYhGjnI/BIw4=</string>
 </resources>
+
