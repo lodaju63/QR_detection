@@ -1718,10 +1718,22 @@ class WebcamWindow(QMainWindow):
                 self.log_table.insertRow(row_count)
                 
                 # 데이터 정리 (모든 공백 제거 - 앞뒤 공백 및 내부 불필요한 공백)
-                timestamp = ' '.join(str(entry['timestamp']).split())
-                frame_no = ' '.join(str(entry['frame_no']).split())
-                decoded_data = ' '.join(str(entry['decoded_data'][:50]).split())
-                status = ' '.join(str(entry['status']).split())
+                # 저장된 데이터도 다시 한 번 정리 (이전에 저장된 데이터에 공백이 있을 수 있음)
+                # 먼저 공백 제거 후 슬라이싱 (슬라이싱 후 공백 제거하면 문제 발생 가능)
+                decoded_data_raw = ' '.join(str(entry.get('decoded_data', '')).split())
+                decoded_data = decoded_data_raw[:50] if len(decoded_data_raw) > 50 else decoded_data_raw
+                # 슬라이싱 후에도 다시 한 번 공백 제거 (안전장치)
+                decoded_data = ' '.join(decoded_data.split())
+                
+                timestamp = ' '.join(str(entry.get('timestamp', '')).split())
+                frame_no = ' '.join(str(entry.get('frame_no', '')).split())
+                status = ' '.join(str(entry.get('status', '')).split())
+                
+                # 모든 값에서 앞뒤 공백 완전 제거
+                timestamp = timestamp.strip()
+                frame_no = frame_no.strip()
+                decoded_data = decoded_data.strip()
+                status = status.strip()
                 
                 # QTableWidgetItem 생성 및 텍스트 정렬 설정
                 item0 = QTableWidgetItem(timestamp)
@@ -3159,10 +3171,22 @@ class QRAnalysisMainWindow(QMainWindow):
                 self.log_table.insertRow(row_count)
                 
                 # 데이터 정리 (모든 공백 제거 - 앞뒤 공백 및 내부 불필요한 공백)
-                timestamp = ' '.join(str(entry['timestamp']).split())
-                frame_no = ' '.join(str(entry['frame_no']).split())
-                decoded_data = ' '.join(str(entry['decoded_data'][:50]).split())
-                status = ' '.join(str(entry['status']).split())
+                # 저장된 데이터도 다시 한 번 정리 (이전에 저장된 데이터에 공백이 있을 수 있음)
+                # 먼저 공백 제거 후 슬라이싱 (슬라이싱 후 공백 제거하면 문제 발생 가능)
+                decoded_data_raw = ' '.join(str(entry.get('decoded_data', '')).split())
+                decoded_data = decoded_data_raw[:50] if len(decoded_data_raw) > 50 else decoded_data_raw
+                # 슬라이싱 후에도 다시 한 번 공백 제거 (안전장치)
+                decoded_data = ' '.join(decoded_data.split())
+                
+                timestamp = ' '.join(str(entry.get('timestamp', '')).split())
+                frame_no = ' '.join(str(entry.get('frame_no', '')).split())
+                status = ' '.join(str(entry.get('status', '')).split())
+                
+                # 모든 값에서 앞뒤 공백 완전 제거
+                timestamp = timestamp.strip()
+                frame_no = frame_no.strip()
+                decoded_data = decoded_data.strip()
+                status = status.strip()
                 
                 # QTableWidgetItem 생성 및 텍스트 정렬 설정
                 item0 = QTableWidgetItem(timestamp)
