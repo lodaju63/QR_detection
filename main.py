@@ -1717,16 +1717,28 @@ class WebcamWindow(QMainWindow):
                 row_count = self.log_table.rowCount()
                 self.log_table.insertRow(row_count)
                 
-                # 데이터 정리 (공백 제거)
-                timestamp = str(entry['timestamp']).strip()
-                frame_no = str(entry['frame_no']).strip()
-                decoded_data = str(entry['decoded_data'][:50]).strip()
-                status = str(entry['status']).strip()
+                # 데이터 정리 (모든 공백 제거 - 앞뒤 공백 및 내부 불필요한 공백)
+                timestamp = ' '.join(str(entry['timestamp']).split())
+                frame_no = ' '.join(str(entry['frame_no']).split())
+                decoded_data = ' '.join(str(entry['decoded_data'][:50]).split())
+                status = ' '.join(str(entry['status']).split())
                 
-                self.log_table.setItem(row_count, 0, QTableWidgetItem(timestamp))
-                self.log_table.setItem(row_count, 1, QTableWidgetItem(frame_no))
-                self.log_table.setItem(row_count, 2, QTableWidgetItem(decoded_data))
-                self.log_table.setItem(row_count, 3, QTableWidgetItem(status))
+                # QTableWidgetItem 생성 및 텍스트 정렬 설정
+                item0 = QTableWidgetItem(timestamp)
+                item0.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self.log_table.setItem(row_count, 0, item0)
+                
+                item1 = QTableWidgetItem(frame_no)
+                item1.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self.log_table.setItem(row_count, 1, item1)
+                
+                item2 = QTableWidgetItem(decoded_data)
+                item2.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self.log_table.setItem(row_count, 2, item2)
+                
+                item3 = QTableWidgetItem(status)
+                item3.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self.log_table.setItem(row_count, 3, item3)
         
         self.log_table.scrollToBottom()
     
@@ -1761,16 +1773,28 @@ class WebcamWindow(QMainWindow):
             row_count = self.log_table.rowCount()
             self.log_table.insertRow(row_count)
             
-            # 데이터 정리 (공백 제거)
-            timestamp_clean = str(timestamp).strip()
-            frame_no_clean = str(frame_no).strip()
-            decoded_data_clean = str(decoded_data[:50]).strip()
-            status_clean = str(status).strip()
+            # 데이터 정리 (모든 공백 제거 - 앞뒤 공백 및 내부 불필요한 공백)
+            timestamp_clean = ' '.join(str(timestamp).split())
+            frame_no_clean = ' '.join(str(frame_no).split())
+            decoded_data_clean = ' '.join(str(decoded_data[:50]).split())
+            status_clean = ' '.join(str(status).split())
             
-            self.log_table.setItem(row_count, 0, QTableWidgetItem(timestamp_clean))
-            self.log_table.setItem(row_count, 1, QTableWidgetItem(frame_no_clean))
-            self.log_table.setItem(row_count, 2, QTableWidgetItem(decoded_data_clean))
-            self.log_table.setItem(row_count, 3, QTableWidgetItem(status_clean))
+            # QTableWidgetItem 생성 및 텍스트 정렬 설정
+            item0 = QTableWidgetItem(timestamp_clean)
+            item0.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.log_table.setItem(row_count, 0, item0)
+            
+            item1 = QTableWidgetItem(frame_no_clean)
+            item1.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.log_table.setItem(row_count, 1, item1)
+            
+            item2 = QTableWidgetItem(decoded_data_clean)
+            item2.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.log_table.setItem(row_count, 2, item2)
+            
+            item3 = QTableWidgetItem(status_clean)
+            item3.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.log_table.setItem(row_count, 3, item3)
             
             # 자동 스크롤
             self.log_table.scrollToBottom()
@@ -3131,16 +3155,28 @@ class QRAnalysisMainWindow(QMainWindow):
                 row_count = self.log_table.rowCount()
                 self.log_table.insertRow(row_count)
                 
-                # 데이터 정리 (공백 제거)
-                timestamp = str(entry['timestamp']).strip()
-                frame_no = str(entry['frame_no']).strip()
-                decoded_data = str(entry['decoded_data'][:50]).strip()
-                status = str(entry['status']).strip()
+                # 데이터 정리 (모든 공백 제거 - 앞뒤 공백 및 내부 불필요한 공백)
+                timestamp = ' '.join(str(entry['timestamp']).split())
+                frame_no = ' '.join(str(entry['frame_no']).split())
+                decoded_data = ' '.join(str(entry['decoded_data'][:50]).split())
+                status = ' '.join(str(entry['status']).split())
                 
-                self.log_table.setItem(row_count, 0, QTableWidgetItem(timestamp))
-                self.log_table.setItem(row_count, 1, QTableWidgetItem(frame_no))
-                self.log_table.setItem(row_count, 2, QTableWidgetItem(decoded_data))
-                self.log_table.setItem(row_count, 3, QTableWidgetItem(status))
+                # QTableWidgetItem 생성 및 텍스트 정렬 설정
+                item0 = QTableWidgetItem(timestamp)
+                item0.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self.log_table.setItem(row_count, 0, item0)
+                
+                item1 = QTableWidgetItem(frame_no)
+                item1.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self.log_table.setItem(row_count, 1, item1)
+                
+                item2 = QTableWidgetItem(decoded_data)
+                item2.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self.log_table.setItem(row_count, 2, item2)
+                
+                item3 = QTableWidgetItem(status)
+                item3.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self.log_table.setItem(row_count, 3, item3)
         
         # 자동 스크롤
         self.log_table.scrollToBottom()
@@ -3263,16 +3299,28 @@ class QRAnalysisMainWindow(QMainWindow):
             row_count = self.log_table.rowCount()
             self.log_table.insertRow(row_count)
             
-            # 데이터 정리 (공백 제거)
-            timestamp_clean = str(timestamp).strip()
-            frame_no_clean = str(frame_no).strip()
-            decoded_data_clean = str(decoded_data[:50]).strip()
-            status_clean = str(status).strip()
+            # 데이터 정리 (모든 공백 제거 - 앞뒤 공백 및 내부 불필요한 공백)
+            timestamp_clean = ' '.join(str(timestamp).split())
+            frame_no_clean = ' '.join(str(frame_no).split())
+            decoded_data_clean = ' '.join(str(decoded_data[:50]).split())
+            status_clean = ' '.join(str(status).split())
             
-            self.log_table.setItem(row_count, 0, QTableWidgetItem(timestamp_clean))
-            self.log_table.setItem(row_count, 1, QTableWidgetItem(frame_no_clean))
-            self.log_table.setItem(row_count, 2, QTableWidgetItem(decoded_data_clean))
-            self.log_table.setItem(row_count, 3, QTableWidgetItem(status_clean))
+            # QTableWidgetItem 생성 및 텍스트 정렬 설정
+            item0 = QTableWidgetItem(timestamp_clean)
+            item0.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.log_table.setItem(row_count, 0, item0)
+            
+            item1 = QTableWidgetItem(frame_no_clean)
+            item1.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.log_table.setItem(row_count, 1, item1)
+            
+            item2 = QTableWidgetItem(decoded_data_clean)
+            item2.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.log_table.setItem(row_count, 2, item2)
+            
+            item3 = QTableWidgetItem(status_clean)
+            item3.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.log_table.setItem(row_count, 3, item3)
             
             # 자동 스크롤
             self.log_table.scrollToBottom()
