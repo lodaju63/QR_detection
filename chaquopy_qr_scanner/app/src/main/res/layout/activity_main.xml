@@ -11,6 +11,14 @@
         android:id="@+id/previewView"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
+    
+    <!-- 바코드 위치 시각화용 오버레이 -->
+    <View
+        android:id="@+id/barcodeOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@android:color/transparent"
+        android:visibility="gone" />
 
     <TextView
         android:id="@+id/resultText"

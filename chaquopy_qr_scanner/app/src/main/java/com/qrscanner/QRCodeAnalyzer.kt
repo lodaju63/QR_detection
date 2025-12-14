@@ -16,7 +16,7 @@ import java.nio.ByteBuffer
 class QRCodeAnalyzer(
     private val router: CaptureVisionRouter?,  // V11: BarcodeReader 대신 CaptureVisionRouter 사용
     private val python: Python?,
-    private val onResult: (String) -> Unit,
+    private val onResult: (String, android.graphics.Rect?) -> Unit,  // 바코드 텍스트와 위치 정보 전달
     private val roiRect: android.graphics.Rect? = null,
     private val onDecodeAttempt: ((Int, Boolean) -> Unit)? = null
 ) : ImageAnalysis.Analyzer {
@@ -111,13 +111,18 @@ class QRCodeAnalyzer(
                         format = EnumImagePixelFormat.IPF_GRAYSCALED
                     }
                     
-                    android.util.Log.d("QRCodeAnalyzer", "ImageData: ${actualWidth}x${actualHeight}, stride: ${imageData.stride}, data size: ${finalData.size}")
+                    // 디버그 로그는 첫 시도와 매 100번째 시도마다만 출력
+                    if (attemptCount == 1 || attemptCount % 100 == 0) {
+                        android.util.Log.d("QRCodeAnalyzer", "ImageData: ${actualWidth}x${actualHeight}, stride: ${imageData.stride}")
+                    }
                     
                     // V11: capture 메서드로 바코드 해독
                     val result: CapturedResult? = router.capture(imageData, "ReadSingleBarcode")
                     
-                    val logMsg = "시도 #$attemptCount | 결과: ${if (result != null) "있음" else "없음"} | 이미지: ${actualWidth}x${actualHeight} stride: $actualStride"
-                    android.util.Log.d("QRCodeAnalyzer", logMsg)
+                    // 로그 빈도 줄이기: 매 50번째 시도마다만 로그 출력
+                    if (attemptCount % 50 == 0) {
+                        android.util.Log.d("QRCodeAnalyzer", "시도 #$attemptCount | 결과: ${if (result != null) "있음" else "없음"}")
+                    }
                     
                     var hasResult = false
                     if (result != null) {
@@ -125,19 +130,53 @@ class QRCodeAnalyzer(
                         try {
                             // 방법 1: getDecodedBarcodesResult() 직접 호출
                             val decodedBarcodesResult = result.decodedBarcodesResult
-                            android.util.Log.d("QRCodeAnalyzer", "decodedBarcodesResult: $decodedBarcodesResult")
                             
                             if (decodedBarcodesResult != null) {
                                 val barcodeItems = decodedBarcodesResult.items
-                                android.util.Log.d("QRCodeAnalyzer", "barcodeItems: ${barcodeItems?.size ?: 0}개")
                                 
                                 if (barcodeItems != null && barcodeItems.isNotEmpty()) {
                                     for (barcodeItem: BarcodeResultItem in barcodeItems) {
                                         val text = barcodeItem.text
-                                        android.util.Log.d("QRCodeAnalyzer", "Found barcode: $text, format: ${barcodeItem.format}")
                                         if (!text.isNullOrEmpty()) {
                                             hasResult = true
-                                            onResult(text)
+                                            
+                                            // 바코드 위치 정보 추출
+                                            val barcodeRect = try {
+                                                val location = barcodeItem.localizationResult
+                                                if (location != null) {
+                                                    val points = location.resultPoints
+                                                    if (points != null && points.size >= 4) {
+                                                        // 4개 점에서 바운딩 박스 계산
+                                                        var minX = Int.MAX_VALUE
+                                                        var minY = Int.MAX_VALUE
+                                                        var maxX = Int.MIN_VALUE
+                                                        var maxY = Int.MIN_VALUE
+                                                        
+                                                        for (point in points) {
+                                                            val x = point.x.toInt()
+                                                            val y = point.y.toInt()
+                                                            minX = minOf(minX, x)
+                                                            minY = minOf(minY, y)
+                                                            maxX = maxOf(maxX, x)
+                                                            maxY = maxOf(maxY, y)
+                                                        }
+                                                        
+                                                        // ROI 오프셋 추가 (전체 이미지 좌표로 변환)
+                                                        android.graphics.Rect(
+                                                            minX + offsetX,
+                                                            minY + offsetY,
+                                                            maxX + offsetX,
+                                                            maxY + offsetY
+                                                        )
+                                                    } else null
+                                                } else null
+                                            } catch (e: Exception) {
+                                                android.util.Log.e("QRCodeAnalyzer", "Error getting location: ${e.message}")
+                                                null
+                                            }
+                                            
+                                            android.util.Log.d("QRCodeAnalyzer", "✅ Found barcode: $text, rect: $barcodeRect")
+                                            onResult(text, barcodeRect)
                                             onDecodeAttempt?.invoke(attemptCount, true)
                                             attemptCount = 0
                                             imageProxy.close()
@@ -149,19 +188,49 @@ class QRCodeAnalyzer(
                             
                             // 방법 2: items를 통한 접근 (fallback)
                             val items = result.items
-                            android.util.Log.d("QRCodeAnalyzer", "result.items: ${items?.size ?: 0}개")
                             if (items != null && items.isNotEmpty()) {
                                 for (item in items) {
-                                    android.util.Log.d("QRCodeAnalyzer", "item type: ${item.javaClass.simpleName}")
                                     if (item is DecodedBarcodesResult) {
                                         val barcodeItems = item.items
                                         if (barcodeItems != null && barcodeItems.isNotEmpty()) {
                                             for (barcodeItem: BarcodeResultItem in barcodeItems) {
                                                 val text = barcodeItem.text
-                                                android.util.Log.d("QRCodeAnalyzer", "Found barcode (via items): $text")
                                                 if (!text.isNullOrEmpty()) {
                                                     hasResult = true
-                                                    onResult(text)
+                                                    
+                                                    // 바코드 위치 정보 추출
+                                                    val barcodeRect = try {
+                                                        val location = barcodeItem.localizationResult
+                                                        if (location != null) {
+                                                            val points = location.resultPoints
+                                                            if (points != null && points.size >= 4) {
+                                                                var minX = Int.MAX_VALUE
+                                                                var minY = Int.MAX_VALUE
+                                                                var maxX = Int.MIN_VALUE
+                                                                var maxY = Int.MIN_VALUE
+                                                                
+                                                                for (point in points) {
+                                                                    val x = point.x.toInt()
+                                                                    val y = point.y.toInt()
+                                                                    minX = minOf(minX, x)
+                                                                    minY = minOf(minY, y)
+                                                                    maxX = maxOf(maxX, x)
+                                                                    maxY = maxOf(maxY, y)
+                                                                }
+                                                                
+                                                                android.graphics.Rect(
+                                                                    minX + offsetX,
+                                                                    minY + offsetY,
+                                                                    maxX + offsetX,
+                                                                    maxY + offsetY
+                                                                )
+                                                            } else null
+                                                        } else null
+                                                    } catch (e: Exception) {
+                                                        null
+                                                    }
+                                                    
+                                                    onResult(text, barcodeRect)
                                                     onDecodeAttempt?.invoke(attemptCount, true)
                                                     attemptCount = 0
                                                     imageProxy.close()
@@ -175,8 +244,6 @@ class QRCodeAnalyzer(
                         } catch (e: Exception) {
                             android.util.Log.e("QRCodeAnalyzer", "Error accessing result: ${e.message}", e)
                         }
-                    } else {
-                        android.util.Log.d("QRCodeAnalyzer", "capture() returned null")
                     }
                     
                     // 해독 시도 결과 콜백 (성공하지 못한 경우)

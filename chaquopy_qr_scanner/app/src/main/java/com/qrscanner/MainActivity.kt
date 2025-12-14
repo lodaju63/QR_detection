@@ -39,6 +39,7 @@ class MainActivity : AppCompatActivity() {
     private var lastDecodeTime = 0L
     private val logHistory = mutableListOf<String>()
     private var isLicenseValid = false  // 라이선스 검증 상태 추적
+    private var barcodeOverlayView: android.view.View? = null  // 바코드 위치 시각화용 오버레이
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -49,6 +50,17 @@ class MainActivity : AppCompatActivity() {
         roiBorder = findViewById(R.id.roiBorder)
         debugText = findViewById(R.id.debugText)
         debugScrollView = findViewById(R.id.debugScrollView)
+        
+        // 바코드 오버레이를 커스텀 뷰로 설정
+        barcodeOverlayView = BarcodeOverlayView(this).apply {
+            layoutParams = android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            setBackgroundColor(Color.TRANSPARENT)
+        }
+        val parent = previewView.parent as? android.view.ViewGroup
+        parent?.addView(barcodeOverlayView)
         
         // 디버그 텍스트 표시 (개발 중)
         debugText.visibility = android.view.View.VISIBLE
@@ -212,13 +224,20 @@ class MainActivity : AppCompatActivity() {
                 .build()
                 .also {
                     val roiRect = calculateROIRect()
-                    it.setAnalyzer(cameraExecutor, QRCodeAnalyzer(cvRouter, python, { text ->
+                    it.setAnalyzer(cameraExecutor, QRCodeAnalyzer(cvRouter, python, { text, barcodeRect ->
                         runOnUiThread {
                             resultText.text = "QR: $text"
                             resultText.setTextColor(Color.GREEN)
                             addLog("✅ 해독 성공! (시도: $decodeAttemptCount)", Color.GREEN)
                             addLog("QR 코드: $text", Color.GREEN)
                             decodeAttemptCount = 0
+                            
+                            // 바코드 위치 시각화
+                            if (barcodeRect != null) {
+                                drawBarcodeBox(barcodeRect)
+                            } else {
+                                clearBarcodeBox()
+                            }
                         }
                     }, roiRect) { attemptCount, hasResult ->
                         runOnUiThread {
@@ -232,12 +251,13 @@ class MainActivity : AppCompatActivity() {
                             lastDecodeTime = currentTime
                             
                             if (!hasResult) {
-                                // 주기적으로 상태 업데이트 (매 10번째 시도마다)
-                                if (attemptCount % 10 == 0) {
-                                    val roiInfo = if (roiRect != null) "${roiRect.width()}x${roiRect.height()}" else "계산중"
-                                    addLog("🔍 스캔 중... 시도: $attemptCount | FPS: $fps | ROI: $roiInfo", Color.YELLOW)
-                                    android.util.Log.d("MainActivity", "Scan attempt #$attemptCount, FPS: $fps, ROI: $roiInfo")
+                                // 스캔 중 메시지는 한 번만 표시
+                                if (attemptCount == 1) {
+                                    addLog("🔍 스캔 중...", Color.YELLOW)
                                 }
+                            } else {
+                                // 바코드 박스 제거
+                                clearBarcodeBox()
                             }
                         }
                     })
@@ -363,6 +383,33 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun drawBarcodeBox(rect: android.graphics.Rect) {
+        // 이미지 좌표를 화면 좌표로 변환
+        val imageWidth = previewView.width
+        val imageHeight = previewView.height
+        
+        if (imageWidth > 0 && imageHeight > 0) {
+            // PreviewView의 실제 크기와 이미지 크기 비율 계산
+            val scaleX = imageWidth.toFloat() / previewView.width.toFloat()
+            val scaleY = imageHeight.toFloat() / previewView.height.toFloat()
+            
+            val screenRect = android.graphics.Rect(
+                (rect.left / scaleX).toInt(),
+                (rect.top / scaleY).toInt(),
+                (rect.right / scaleX).toInt(),
+                (rect.bottom / scaleY).toInt()
+            )
+            
+            (barcodeOverlayView as? BarcodeOverlayView)?.setBarcodeRect(screenRect)
+            barcodeOverlayView?.visibility = android.view.View.VISIBLE
+        }
+    }
+    
+    private fun clearBarcodeBox() {
+        (barcodeOverlayView as? BarcodeOverlayView)?.clearBarcodeRect()
+        barcodeOverlayView?.visibility = android.view.View.GONE
+    }
+    
     private fun addLog(message: String, color: Int) {
         val timestamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
         val logEntry = "[$timestamp] $message"
