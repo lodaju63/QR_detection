@@ -11,6 +11,7 @@ import com.dynamsoft.core.basic_structures.EnumImagePixelFormat
 import com.dynamsoft.dbr.DecodedBarcodesResult
 import com.dynamsoft.dbr.BarcodeResultItem
 import com.dynamsoft.core.basic_structures.Quadrilateral
+import android.graphics.Point as AndroidPoint
 import com.chaquo.python.Python
 import java.nio.ByteBuffer
 
@@ -155,27 +156,38 @@ class QRCodeAnalyzer(
                                                         
                                                         for (i in 0 until points.size) {
                                                             val point = points[i]
-                                                            // Point 객체의 x, y 속성 접근 (리플렉션 사용)
-                                                            val x = try {
-                                                                val getXMethod = point.javaClass.getMethod("getX")
-                                                                getXMethod.invoke(point) as? Float ?: 
-                                                                point.javaClass.getField("x").get(point) as? Float ?: 0f
-                                                            } catch (e: Exception) {
-                                                                try {
-                                                                    point.javaClass.getField("x").get(point) as? Float ?: 0f
-                                                                } catch (e2: Exception) {
-                                                                    0f
+                                                            // Point 객체의 x, y 속성 접근
+                                                            val x = when {
+                                                                point is AndroidPoint -> point.x.toFloat()
+                                                                else -> {
+                                                                    // 리플렉션으로 접근 시도
+                                                                    try {
+                                                                        val getXMethod = point.javaClass.getMethod("getX")
+                                                                        (getXMethod.invoke(point) as? Number)?.toFloat() ?: 
+                                                                        (point.javaClass.getField("x").get(point) as? Number)?.toFloat() ?: 0f
+                                                                    } catch (e: Exception) {
+                                                                        try {
+                                                                            (point.javaClass.getField("x").get(point) as? Number)?.toFloat() ?: 0f
+                                                                        } catch (e2: Exception) {
+                                                                            0f
+                                                                        }
+                                                                    }
                                                                 }
                                                             }
-                                                            val y = try {
-                                                                val getYMethod = point.javaClass.getMethod("getY")
-                                                                getYMethod.invoke(point) as? Float ?:
-                                                                point.javaClass.getField("y").get(point) as? Float ?: 0f
-                                                            } catch (e: Exception) {
-                                                                try {
-                                                                    point.javaClass.getField("y").get(point) as? Float ?: 0f
-                                                                } catch (e2: Exception) {
-                                                                    0f
+                                                            val y = when {
+                                                                point is AndroidPoint -> point.y.toFloat()
+                                                                else -> {
+                                                                    try {
+                                                                        val getYMethod = point.javaClass.getMethod("getY")
+                                                                        (getYMethod.invoke(point) as? Number)?.toFloat() ?:
+                                                                        (point.javaClass.getField("y").get(point) as? Number)?.toFloat() ?: 0f
+                                                                    } catch (e: Exception) {
+                                                                        try {
+                                                                            (point.javaClass.getField("y").get(point) as? Number)?.toFloat() ?: 0f
+                                                                        } catch (e2: Exception) {
+                                                                            0f
+                                                                        }
+                                                                    }
                                                                 }
                                                             }
                                                             minX = minOf(minX, x.toInt())
