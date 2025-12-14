@@ -11,7 +11,6 @@ import com.dynamsoft.core.basic_structures.EnumImagePixelFormat
 import com.dynamsoft.dbr.DecodedBarcodesResult
 import com.dynamsoft.dbr.BarcodeResultItem
 import com.dynamsoft.core.basic_structures.Quadrilateral
-import com.dynamsoft.core.basic_structures.Point
 import com.chaquo.python.Python
 import java.nio.ByteBuffer
 
@@ -154,13 +153,35 @@ class QRCodeAnalyzer(
                                                         var maxX = Int.MIN_VALUE
                                                         var maxY = Int.MIN_VALUE
                                                         
-                                                        for (point: Point in points) {
-                                                            val x = point.x.toInt()
-                                                            val y = point.y.toInt()
-                                                            minX = minOf(minX, x)
-                                                            minY = minOf(minY, y)
-                                                            maxX = maxOf(maxX, x)
-                                                            maxY = maxOf(maxY, y)
+                                                        for (i in 0 until points.size) {
+                                                            val point = points[i]
+                                                            // Point 객체의 x, y 속성 접근 (리플렉션 사용)
+                                                            val x = try {
+                                                                val getXMethod = point.javaClass.getMethod("getX")
+                                                                getXMethod.invoke(point) as? Float ?: 
+                                                                point.javaClass.getField("x").get(point) as? Float ?: 0f
+                                                            } catch (e: Exception) {
+                                                                try {
+                                                                    point.javaClass.getField("x").get(point) as? Float ?: 0f
+                                                                } catch (e2: Exception) {
+                                                                    0f
+                                                                }
+                                                            }
+                                                            val y = try {
+                                                                val getYMethod = point.javaClass.getMethod("getY")
+                                                                getYMethod.invoke(point) as? Float ?:
+                                                                point.javaClass.getField("y").get(point) as? Float ?: 0f
+                                                            } catch (e: Exception) {
+                                                                try {
+                                                                    point.javaClass.getField("y").get(point) as? Float ?: 0f
+                                                                } catch (e2: Exception) {
+                                                                    0f
+                                                                }
+                                                            }
+                                                            minX = minOf(minX, x.toInt())
+                                                            minY = minOf(minY, y.toInt())
+                                                            maxX = maxOf(maxX, x.toInt())
+                                                            maxY = maxOf(maxY, y.toInt())
                                                         }
                                                         
                                                         // ROI 오프셋 추가 (전체 이미지 좌표로 변환)
