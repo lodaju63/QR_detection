@@ -1649,6 +1649,12 @@ class WebcamWindow(QMainWindow):
         self.log_table.setHorizontalHeaderLabels(["Timestamp", "Frame No", "Decoded Data", "Status"])
         self.log_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.log_table.setAlternatingRowColors(True)
+        # Vertical header 클릭 비활성화 (홀수 행 선택 버그 방지)
+        self.log_table.verticalHeader().setSectionsClickable(False)
+        self.log_table.verticalHeader().setDefaultSectionSize(25)
+        # 행 선택 모드 설정
+        self.log_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.log_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.log_table.setMinimumHeight(200)
         self.log_table.setMaximumHeight(200)
         
@@ -1711,10 +1717,16 @@ class WebcamWindow(QMainWindow):
                 row_count = self.log_table.rowCount()
                 self.log_table.insertRow(row_count)
                 
-                self.log_table.setItem(row_count, 0, QTableWidgetItem(entry['timestamp']))
-                self.log_table.setItem(row_count, 1, QTableWidgetItem(str(entry['frame_no'])))
-                self.log_table.setItem(row_count, 2, QTableWidgetItem(entry['decoded_data'][:50]))
-                self.log_table.setItem(row_count, 3, QTableWidgetItem(entry['status']))
+                # 데이터 정리 (공백 제거)
+                timestamp = str(entry['timestamp']).strip()
+                frame_no = str(entry['frame_no']).strip()
+                decoded_data = str(entry['decoded_data'][:50]).strip()
+                status = str(entry['status']).strip()
+                
+                self.log_table.setItem(row_count, 0, QTableWidgetItem(timestamp))
+                self.log_table.setItem(row_count, 1, QTableWidgetItem(frame_no))
+                self.log_table.setItem(row_count, 2, QTableWidgetItem(decoded_data))
+                self.log_table.setItem(row_count, 3, QTableWidgetItem(status))
         
         self.log_table.scrollToBottom()
     
@@ -1749,10 +1761,16 @@ class WebcamWindow(QMainWindow):
             row_count = self.log_table.rowCount()
             self.log_table.insertRow(row_count)
             
-            self.log_table.setItem(row_count, 0, QTableWidgetItem(timestamp))
-            self.log_table.setItem(row_count, 1, QTableWidgetItem(str(frame_no)))
-            self.log_table.setItem(row_count, 2, QTableWidgetItem(decoded_data[:50]))
-            self.log_table.setItem(row_count, 3, QTableWidgetItem(status))
+            # 데이터 정리 (공백 제거)
+            timestamp_clean = str(timestamp).strip()
+            frame_no_clean = str(frame_no).strip()
+            decoded_data_clean = str(decoded_data[:50]).strip()
+            status_clean = str(status).strip()
+            
+            self.log_table.setItem(row_count, 0, QTableWidgetItem(timestamp_clean))
+            self.log_table.setItem(row_count, 1, QTableWidgetItem(frame_no_clean))
+            self.log_table.setItem(row_count, 2, QTableWidgetItem(decoded_data_clean))
+            self.log_table.setItem(row_count, 3, QTableWidgetItem(status_clean))
             
             # 자동 스크롤
             self.log_table.scrollToBottom()
@@ -2102,6 +2120,12 @@ class QRAnalysisMainWindow(QMainWindow):
         self.log_table.setHorizontalHeaderLabels(["Timestamp", "Frame No", "Decoded Data", "Status"])
         self.log_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.log_table.setAlternatingRowColors(True)
+        # Vertical header 클릭 비활성화 (홀수 행 선택 버그 방지)
+        self.log_table.verticalHeader().setSectionsClickable(False)
+        self.log_table.verticalHeader().setDefaultSectionSize(25)
+        # 행 선택 모드 설정
+        self.log_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.log_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         # 10줄 정도 보이도록 높이 설정 (헤더 + 10행 * 약 30px)
         self.log_table.setMinimumHeight(330)
         self.log_table.setMaximumHeight(330)
@@ -3107,10 +3131,16 @@ class QRAnalysisMainWindow(QMainWindow):
                 row_count = self.log_table.rowCount()
                 self.log_table.insertRow(row_count)
                 
-                self.log_table.setItem(row_count, 0, QTableWidgetItem(entry['timestamp']))
-                self.log_table.setItem(row_count, 1, QTableWidgetItem(str(entry['frame_no'])))
-                self.log_table.setItem(row_count, 2, QTableWidgetItem(entry['decoded_data'][:50]))
-                self.log_table.setItem(row_count, 3, QTableWidgetItem(entry['status']))
+                # 데이터 정리 (공백 제거)
+                timestamp = str(entry['timestamp']).strip()
+                frame_no = str(entry['frame_no']).strip()
+                decoded_data = str(entry['decoded_data'][:50]).strip()
+                status = str(entry['status']).strip()
+                
+                self.log_table.setItem(row_count, 0, QTableWidgetItem(timestamp))
+                self.log_table.setItem(row_count, 1, QTableWidgetItem(frame_no))
+                self.log_table.setItem(row_count, 2, QTableWidgetItem(decoded_data))
+                self.log_table.setItem(row_count, 3, QTableWidgetItem(status))
         
         # 자동 스크롤
         self.log_table.scrollToBottom()
@@ -3233,10 +3263,16 @@ class QRAnalysisMainWindow(QMainWindow):
             row_count = self.log_table.rowCount()
             self.log_table.insertRow(row_count)
             
-            self.log_table.setItem(row_count, 0, QTableWidgetItem(timestamp))
-            self.log_table.setItem(row_count, 1, QTableWidgetItem(str(frame_no)))
-            self.log_table.setItem(row_count, 2, QTableWidgetItem(decoded_data[:50]))
-            self.log_table.setItem(row_count, 3, QTableWidgetItem(status))
+            # 데이터 정리 (공백 제거)
+            timestamp_clean = str(timestamp).strip()
+            frame_no_clean = str(frame_no).strip()
+            decoded_data_clean = str(decoded_data[:50]).strip()
+            status_clean = str(status).strip()
+            
+            self.log_table.setItem(row_count, 0, QTableWidgetItem(timestamp_clean))
+            self.log_table.setItem(row_count, 1, QTableWidgetItem(frame_no_clean))
+            self.log_table.setItem(row_count, 2, QTableWidgetItem(decoded_data_clean))
+            self.log_table.setItem(row_count, 3, QTableWidgetItem(status_clean))
             
             # 자동 스크롤
             self.log_table.scrollToBottom()
