@@ -224,7 +224,7 @@ class MainActivity : AppCompatActivity() {
                 .build()
                 .also {
                     val roiRect = calculateROIRect()
-                    it.setAnalyzer(cameraExecutor, QRCodeAnalyzer(cvRouter, python, { text, barcodeRect ->
+                    it.setAnalyzer(cameraExecutor, QRCodeAnalyzer(cvRouter, python, { text, barcodeRect, imageWidth, imageHeight ->
                         runOnUiThread {
                             resultText.text = "QR: $text"
                             resultText.setTextColor(Color.GREEN)
@@ -234,7 +234,7 @@ class MainActivity : AppCompatActivity() {
                             
                             // 바코드 위치 시각화
                             if (barcodeRect != null) {
-                                drawBarcodeBox(barcodeRect)
+                                drawBarcodeBox(barcodeRect, imageWidth, imageHeight)
                             } else {
                                 clearBarcodeBox()
                             }
@@ -383,25 +383,30 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun drawBarcodeBox(rect: android.graphics.Rect) {
+    private fun drawBarcodeBox(rect: android.graphics.Rect, imageWidth: Int, imageHeight: Int) {
         // 이미지 좌표를 화면 좌표로 변환
-        val imageWidth = previewView.width
-        val imageHeight = previewView.height
+        val viewWidth = previewView.width
+        val viewHeight = previewView.height
         
-        if (imageWidth > 0 && imageHeight > 0) {
-            // PreviewView의 실제 크기와 이미지 크기 비율 계산
-            val scaleX = imageWidth.toFloat() / previewView.width.toFloat()
-            val scaleY = imageHeight.toFloat() / previewView.height.toFloat()
+        if (viewWidth > 0 && viewHeight > 0 && imageWidth > 0 && imageHeight > 0) {
+            // PreviewView의 크기와 이미지 크기 비율 계산
+            val scaleX = viewWidth.toFloat() / imageWidth.toFloat()
+            val scaleY = viewHeight.toFloat() / imageHeight.toFloat()
             
+            // 이미지 좌표를 화면 좌표로 변환
             val screenRect = android.graphics.Rect(
-                (rect.left / scaleX).toInt(),
-                (rect.top / scaleY).toInt(),
-                (rect.right / scaleX).toInt(),
-                (rect.bottom / scaleY).toInt()
+                (rect.left * scaleX).toInt(),
+                (rect.top * scaleY).toInt(),
+                (rect.right * scaleX).toInt(),
+                (rect.bottom * scaleY).toInt()
             )
+            
+            android.util.Log.d("MainActivity", "Barcode rect: $rect -> Screen rect: $screenRect (scale: $scaleX x $scaleY)")
             
             (barcodeOverlayView as? BarcodeOverlayView)?.setBarcodeRect(screenRect)
             barcodeOverlayView?.visibility = android.view.View.VISIBLE
+        } else {
+            android.util.Log.w("MainActivity", "Cannot draw barcode box: view=$viewWidth x $viewHeight, image=$imageWidth x $imageHeight")
         }
     }
     

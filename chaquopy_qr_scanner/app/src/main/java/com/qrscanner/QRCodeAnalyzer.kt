@@ -18,7 +18,7 @@ import java.nio.ByteBuffer
 class QRCodeAnalyzer(
     private val router: CaptureVisionRouter?,  // V11: BarcodeReader 대신 CaptureVisionRouter 사용
     private val python: Python?,
-    private val onResult: (String, android.graphics.Rect?) -> Unit,  // 바코드 텍스트와 위치 정보 전달
+    private val onResult: (String, android.graphics.Rect?, Int, Int) -> Unit,  // 바코드 텍스트, 위치 정보, 이미지 너비, 높이
     private val roiRect: android.graphics.Rect? = null,
     private val onDecodeAttempt: ((Int, Boolean) -> Unit)? = null
 ) : ImageAnalysis.Analyzer {
@@ -211,7 +211,8 @@ class QRCodeAnalyzer(
                                             }
                                             
                                             android.util.Log.d("QRCodeAnalyzer", "✅ Found barcode: $text, rect: $barcodeRect")
-                                            onResult(text, barcodeRect)
+                                            // 이미지 크기 정보와 함께 전달
+                                            onResult(text, barcodeRect, imageProxy.width, imageProxy.height)
                                             onDecodeAttempt?.invoke(attemptCount, true)
                                             attemptCount = 0
                                             imageProxy.close()
@@ -298,7 +299,7 @@ class QRCodeAnalyzer(
                                                         null
                                                     }
                                                     
-                                                    onResult(text, barcodeRect)
+                                                    onResult(text, barcodeRect, imageProxy.width, imageProxy.height)
                                                     onDecodeAttempt?.invoke(attemptCount, true)
                                                     attemptCount = 0
                                                     imageProxy.close()
