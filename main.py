@@ -1746,13 +1746,19 @@ class WebcamWindow(QMainWindow):
         """로그 테이블에 항목 추가"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         
-        # 모든 로그 항목을 저장
+        # 데이터 정리 (저장 시점부터 공백 제거)
+        timestamp_clean = ' '.join(str(timestamp).split())
+        frame_no_clean = ' '.join(str(frame_no).split())
+        decoded_data_clean = ' '.join(str(decoded_data).split())
+        status_clean = ' '.join(str(status).split())
+        
+        # 모든 로그 항목을 저장 (정리된 데이터로 저장)
         log_entry = {
-            'timestamp': timestamp,
-            'frame_no': frame_no,
-            'decoded_data': decoded_data,
-            'status': status,
-            'is_success': '✅' in status
+            'timestamp': timestamp_clean,
+            'frame_no': frame_no_clean,
+            'decoded_data': decoded_data_clean,
+            'status': status_clean,
+            'is_success': '✅' in status_clean
         }
         self.all_log_entries.append(log_entry)
         
@@ -1773,11 +1779,8 @@ class WebcamWindow(QMainWindow):
             row_count = self.log_table.rowCount()
             self.log_table.insertRow(row_count)
             
-            # 데이터 정리 (모든 공백 제거 - 앞뒤 공백 및 내부 불필요한 공백)
-            timestamp_clean = ' '.join(str(timestamp).split())
-            frame_no_clean = ' '.join(str(frame_no).split())
-            decoded_data_clean = ' '.join(str(decoded_data[:50]).split())
-            status_clean = ' '.join(str(status).split())
+            # 이미 정리된 변수 사용 (timestamp_clean, frame_no_clean 등)
+            decoded_data_display = decoded_data_clean[:50] if len(decoded_data_clean) > 50 else decoded_data_clean
             
             # QTableWidgetItem 생성 및 텍스트 정렬 설정
             item0 = QTableWidgetItem(timestamp_clean)
@@ -1788,7 +1791,7 @@ class WebcamWindow(QMainWindow):
             item1.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             self.log_table.setItem(row_count, 1, item1)
             
-            item2 = QTableWidgetItem(decoded_data_clean)
+            item2 = QTableWidgetItem(decoded_data_display)
             item2.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             self.log_table.setItem(row_count, 2, item2)
             
@@ -3272,13 +3275,19 @@ class QRAnalysisMainWindow(QMainWindow):
         """로그 테이블에 항목 추가"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         
-        # 모든 로그 항목을 저장
+        # 데이터 정리 (저장 시점부터 공백 제거)
+        timestamp_clean = ' '.join(str(timestamp).split())
+        frame_no_clean = ' '.join(str(frame_no).split())
+        decoded_data_clean = ' '.join(str(decoded_data).split())
+        status_clean = ' '.join(str(status).split())
+        
+        # 모든 로그 항목을 저장 (정리된 데이터로 저장)
         log_entry = {
-            'timestamp': timestamp,
-            'frame_no': frame_no,
-            'decoded_data': decoded_data,
-            'status': status,
-            'is_success': '✅' in status
+            'timestamp': timestamp_clean,
+            'frame_no': frame_no_clean,
+            'decoded_data': decoded_data_clean,
+            'status': status_clean,
+            'is_success': '✅' in status_clean
         }
         self.all_log_entries.append(log_entry)
         
@@ -3299,11 +3308,8 @@ class QRAnalysisMainWindow(QMainWindow):
             row_count = self.log_table.rowCount()
             self.log_table.insertRow(row_count)
             
-            # 데이터 정리 (모든 공백 제거 - 앞뒤 공백 및 내부 불필요한 공백)
-            timestamp_clean = ' '.join(str(timestamp).split())
-            frame_no_clean = ' '.join(str(frame_no).split())
-            decoded_data_clean = ' '.join(str(decoded_data[:50]).split())
-            status_clean = ' '.join(str(status).split())
+            # 이미 정리된 변수 사용 (timestamp_clean, frame_no_clean 등)
+            decoded_data_display = decoded_data_clean[:50] if len(decoded_data_clean) > 50 else decoded_data_clean
             
             # QTableWidgetItem 생성 및 텍스트 정렬 설정
             item0 = QTableWidgetItem(timestamp_clean)
@@ -3314,7 +3320,7 @@ class QRAnalysisMainWindow(QMainWindow):
             item1.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             self.log_table.setItem(row_count, 1, item1)
             
-            item2 = QTableWidgetItem(decoded_data_clean)
+            item2 = QTableWidgetItem(decoded_data_display)
             item2.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             self.log_table.setItem(row_count, 2, item2)
             
