@@ -244,13 +244,46 @@ class QRCodeAnalyzer(
                                                                 var maxX = Int.MIN_VALUE
                                                                 var maxY = Int.MIN_VALUE
                                                                 
-                                                                for (point: Point in points) {
-                                                                    val x = point.x.toInt()
-                                                                    val y = point.y.toInt()
-                                                                    minX = minOf(minX, x)
-                                                                    minY = minOf(minY, y)
-                                                                    maxX = maxOf(maxX, x)
-                                                                    maxY = maxOf(maxY, y)
+                                                                for (i in 0 until points.size) {
+                                                                    val point = points[i]
+                                                                    // Point 객체의 x, y 속성 접근
+                                                                    val x = when {
+                                                                        point is AndroidPoint -> point.x.toFloat()
+                                                                        else -> {
+                                                                            // 리플렉션으로 접근 시도
+                                                                            try {
+                                                                                val getXMethod = point.javaClass.getMethod("getX")
+                                                                                (getXMethod.invoke(point) as? Number)?.toFloat() ?: 
+                                                                                (point.javaClass.getField("x").get(point) as? Number)?.toFloat() ?: 0f
+                                                                            } catch (e: Exception) {
+                                                                                try {
+                                                                                    (point.javaClass.getField("x").get(point) as? Number)?.toFloat() ?: 0f
+                                                                                } catch (e2: Exception) {
+                                                                                    0f
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                    val y = when {
+                                                                        point is AndroidPoint -> point.y.toFloat()
+                                                                        else -> {
+                                                                            try {
+                                                                                val getYMethod = point.javaClass.getMethod("getY")
+                                                                                (getYMethod.invoke(point) as? Number)?.toFloat() ?:
+                                                                                (point.javaClass.getField("y").get(point) as? Number)?.toFloat() ?: 0f
+                                                                            } catch (e: Exception) {
+                                                                                try {
+                                                                                    (point.javaClass.getField("y").get(point) as? Number)?.toFloat() ?: 0f
+                                                                                } catch (e2: Exception) {
+                                                                                    0f
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                    minX = minOf(minX, x.toInt())
+                                                                    minY = minOf(minY, y.toInt())
+                                                                    maxX = maxOf(maxX, x.toInt())
+                                                                    maxY = maxOf(maxY, y.toInt())
                                                                 }
                                                                 
                                                                 android.graphics.Rect(
