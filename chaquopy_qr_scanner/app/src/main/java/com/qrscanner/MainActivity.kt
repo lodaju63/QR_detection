@@ -19,8 +19,9 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
-import com.dynamsoft.dbr.BarcodeReader
-import com.dynamsoft.dbr.DBRLicenseVerificationListener
+import com.dynamsoft.license.LicenseManager
+import com.dynamsoft.license.LicenseVerificationListener
+import com.dynamsoft.cvr.CaptureVisionRouter
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -28,7 +29,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
     private var imageCapture: ImageCapture? = null
     private var cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
-    private var barcodeReader: BarcodeReader? = null
+    private var cvRouter: CaptureVisionRouter? = null  // V11: BarcodeReader 대신 CaptureVisionRouter 사용
     private var python: Python? = null
     private lateinit var resultText: TextView
     private lateinit var roiBorder: View
@@ -37,6 +38,7 @@ class MainActivity : AppCompatActivity() {
     private var decodeAttemptCount = 0
     private var lastDecodeTime = 0L
     private val logHistory = mutableListOf<String>()
+    private var isLicenseValid = false  // 라이선스 검증 상태 추적
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -73,55 +75,73 @@ class MainActivity : AppCompatActivity() {
             android.util.Log.e("MainActivity", "Failed to load Python module", e)
         }
 
-        // Dynamsoft 초기화 (9.x 버전: 정적 메서드 사용)
+        // Dynamsoft 초기화 (V11.X: LicenseManager 사용)
         val licenseKey = "t0085YQEAADYdcL2llMa8vH1Rtnun+43saE/kdAE7ZbIxMQGRMtSzVSZRI8vfOK4Ids52rjekwzh87yABFLraXw5Va1BV7NnBjI8m7qbw3kxOprI75ExJpw=="
         android.util.Log.d("MainActivity", "Dynamsoft 라이선스 초기화 시작...")
         android.util.Log.d("MainActivity", "라이선스 키 길이: ${licenseKey.length}")
-        BarcodeReader.initLicense(licenseKey, object : DBRLicenseVerificationListener {
-            override fun DBRLicenseVerificationCallback(isSuccess: Boolean, error: Exception?) {
-                runOnUiThread {
-                    if (isSuccess) {
-                        try {
-                            barcodeReader = BarcodeReader()
-                            addLog("✅ Dynamsoft 초기화 완료", Color.GREEN)
-                            addLog("카메라 시작 중...", Color.GREEN)
-                            android.util.Log.d("MainActivity", "Dynamsoft 초기화 성공")
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                            addLog("❌ Dynamsoft 초기화 실패: ${e.message}", Color.RED)
-                            Toast.makeText(this@MainActivity, "Dynamsoft 초기화 실패", Toast.LENGTH_SHORT).show()
+        
+        try {
+            // V11: LicenseManager.initLicense 사용
+            LicenseManager.initLicense(licenseKey, this, object : LicenseVerificationListener {
+                override fun licenseVerificationCallback(isSuccess: Boolean, error: Exception?) {
+                    runOnUiThread {
+                        if (isSuccess) {
+                            try {
+                                // V11: CaptureVisionRouter 인스턴스 생성
+                                cvRouter = CaptureVisionRouter(this@MainActivity)
+                                isLicenseValid = true
+                                addLog("✅ Dynamsoft 초기화 완료", Color.GREEN)
+                                android.util.Log.d("MainActivity", "Dynamsoft 초기화 성공")
+                                
+                                // 라이선스 검증 성공 후 권한이 이미 허용되어 있으면 카메라 시작
+                                if (allPermissionsGranted()) {
+                                    addLog("카메라 시작 중...", Color.GREEN)
+                                    startCamera()
+                                } else {
+                                    addLog("카메라 권한 대기 중...", Color.YELLOW)
+                                }
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                                isLicenseValid = false
+                                addLog("❌ Dynamsoft 초기화 실패: ${e.message}", Color.RED)
+                                Toast.makeText(this@MainActivity, "Dynamsoft 초기화 실패", Toast.LENGTH_SHORT).show()
+                            }
+                        } else {
+                            isLicenseValid = false
+                            error?.printStackTrace()
+                            val errorMsg = error?.message ?: "알 수 없는 오류"
+                            val errorClass = error?.javaClass?.simpleName ?: "Unknown"
+                            addLog("❌ 라이선스 검증 실패!", Color.RED)
+                            addLog("오류 타입: $errorClass", Color.RED)
+                            addLog("메시지: $errorMsg", Color.RED)
+                            addLog("인터넷 연결을 확인하세요", Color.YELLOW)
+                            
+                            // 상세 로그 출력
+                            android.util.Log.e("MainActivity", "Dynamsoft 라이선스 검증 실패", error)
+                            android.util.Log.e("MainActivity", "Error class: $errorClass")
+                            android.util.Log.e("MainActivity", "Error message: $errorMsg")
+                            if (error != null) {
+                                android.util.Log.e("MainActivity", "Error stack trace: ${error.stackTraceToString()}")
+                            }
+                            
+                            Toast.makeText(this@MainActivity, "Dynamsoft 라이선스 검증 실패: $errorMsg", Toast.LENGTH_LONG).show()
+                            
+                            // 라이선스 검증 실패 시 카메라 시작하지 않음
+                            addLog("⚠️ 라이선스 없이 카메라는 시작되지 않습니다", Color.RED)
                         }
-                    } else {
-                        error?.printStackTrace()
-                        val errorMsg = error?.message ?: "알 수 없는 오류"
-                        val errorClass = error?.javaClass?.simpleName ?: "Unknown"
-                        addLog("❌ 라이선스 검증 실패!", Color.RED)
-                        addLog("오류 타입: $errorClass", Color.RED)
-                        addLog("메시지: $errorMsg", Color.RED)
-                        addLog("인터넷 연결을 확인하세요", Color.YELLOW)
-                        
-                        // 상세 로그 출력
-                        android.util.Log.e("MainActivity", "Dynamsoft 라이선스 검증 실패", error)
-                        android.util.Log.e("MainActivity", "Error class: $errorClass")
-                        android.util.Log.e("MainActivity", "Error message: $errorMsg")
-                        if (error != null) {
-                            android.util.Log.e("MainActivity", "Error stack trace: ${error.stackTraceToString()}")
-                        }
-                        
-                        Toast.makeText(this@MainActivity, "Dynamsoft 라이선스 검증 실패: $errorMsg", Toast.LENGTH_LONG).show()
-                        
-                        // 라이선스 검증 실패 시 카메라 시작하지 않음
-                        addLog("⚠️ 라이선스 없이 카메라는 시작되지 않습니다", Color.RED)
-                        return@runOnUiThread
                     }
                 }
-            }
-        })
+            })
+        } catch (e: Exception) {
+            e.printStackTrace()
+            isLicenseValid = false
+            addLog("❌ 라이선스 초기화 중 오류: ${e.message}", Color.RED)
+            android.util.Log.e("MainActivity", "License initialization error", e)
+        }
 
-        // 권한 확인
-        if (allPermissionsGranted()) {
-            startCamera()
-        } else {
+        // 권한 확인 (Dynamsoft 초기화 완료 후 카메라 시작)
+        // 카메라는 Dynamsoft 초기화 성공 후 startCamera()에서 호출됨
+        if (!allPermissionsGranted()) {
             ActivityCompat.requestPermissions(
                 this,
                 REQUIRED_PERMISSIONS,
@@ -137,6 +157,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startCamera() {
+        // 라이선스 검증이 완료되지 않았거나 실패한 경우 카메라 시작하지 않음
+        if (!isLicenseValid || cvRouter == null) {
+            addLog("⚠️ 라이선스 검증이 완료되지 않아 카메라를 시작할 수 없습니다", Color.RED)
+            return
+        }
+        
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
 
         cameraProviderFuture.addListener({
@@ -156,7 +182,7 @@ class MainActivity : AppCompatActivity() {
                 .build()
                 .also {
                     val roiRect = calculateROIRect()
-                    it.setAnalyzer(cameraExecutor, QRCodeAnalyzer(barcodeReader, python, { text ->
+                    it.setAnalyzer(cameraExecutor, QRCodeAnalyzer(cvRouter, python, { text ->
                         runOnUiThread {
                             resultText.text = "QR: $text"
                             resultText.setTextColor(Color.GREEN)
@@ -220,8 +246,15 @@ class MainActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQUEST_CODE_PERMISSIONS) {
             if (allPermissionsGranted()) {
-                startCamera()
+                // 라이선스 검증이 성공하고 Dynamsoft가 초기화되었을 때만 카메라 시작
+                if (isLicenseValid && cvRouter != null) {
+                    addLog("카메라 권한 획득", Color.GREEN)
+                    startCamera()
+                } else {
+                    addLog("⚠️ Dynamsoft 초기화 대기 중...", Color.YELLOW)
+                }
             } else {
+                addLog("❌ 카메라 권한 거부됨", Color.RED)
                 Toast.makeText(
                     this,
                     "카메라 권한이 필요합니다.",
@@ -235,8 +268,9 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
-        // Dynamsoft 9.x에서는 destroy() 메서드가 private이므로 제거
-        // barcodeReader?.destroy()
+        // V11: CaptureVisionRouter 정리
+        cvRouter?.recycle()
+        cvRouter = null
     }
 
     private fun setupROIBorder() {

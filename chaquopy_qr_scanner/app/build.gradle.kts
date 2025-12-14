@@ -68,8 +68,8 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:1.3.0")
     implementation("androidx.camera:camera-view:1.3.0")
     
-    // ✅ [핵심 수정] Dynamsoft Barcode Reader
-    implementation("com.dynamsoft:dynamsoftbarcodereader:9.6.20")
+    // ✅ [핵심 수정] Dynamsoft Barcode Reader V11 (V11.X 라이선스 키 호환)
+    implementation("com.dynamsoft:barcodereaderbundle:11.2.3000")
     
     // Lifecycle
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
@@ -80,3 +80,4 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
 }
+
