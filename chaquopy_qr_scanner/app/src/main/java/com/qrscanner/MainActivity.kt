@@ -76,9 +76,28 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Dynamsoft 초기화 (V11.X: LicenseManager 사용)
-        val licenseKey = "t0085YQEAADYdcL2llMa8vH1Rtnun+43saE/kdAE7ZbIxMQGRMtSzVSZRI8vfOK4Ids52rjekwzh87yABFLraXw5Va1BV7NnBjI8m7qbw3kxOprI75ExJpw=="
+        // ⚠️ 중요: Mobile용 라이선스 키가 필요합니다!
+        // strings.xml의 dynamsoft_license_key에 Mobile용 라이선스 키를 입력하세요
+        // 임시: 하드코딩으로 테스트 (디버깅용)
+        val licenseKeyFromResource = getString(R.string.dynamsoft_license_key)
+        val licenseKey = "t0089pwAAAElBAr4MsYvHTN9tnerSpfBp0z7MvJu/SptdHkueUjT8m1Nfe7AltCjLjDpuOJO60gF/GHY00ZNo3NnYOpUBoYWDb3UqPsCfa6PNjb/yYhGjnI/BIw4="
+        
+        // 리소스에서 읽은 키와 하드코딩된 키 비교
+        android.util.Log.d("MainActivity", "리소스 키: $licenseKeyFromResource")
+        android.util.Log.d("MainActivity", "하드코딩 키: $licenseKey")
+        android.util.Log.d("MainActivity", "키 일치: ${licenseKeyFromResource == licenseKey}")
         android.util.Log.d("MainActivity", "Dynamsoft 라이선스 초기화 시작...")
         android.util.Log.d("MainActivity", "라이선스 키 길이: ${licenseKey.length}")
+        android.util.Log.d("MainActivity", "라이선스 키 (처음 20자): ${licenseKey.take(20)}...")
+        android.util.Log.d("MainActivity", "라이선스 키 (마지막 20자): ...${licenseKey.takeLast(20)}")
+        
+        // 라이선스 키가 기본값인지 확인
+        if (licenseKey == "YOUR_MOBILE_LICENSE_KEY_HERE" || licenseKey.isEmpty()) {
+            addLog("⚠️ 라이선스 키가 설정되지 않았습니다!", Color.RED)
+            addLog("strings.xml에 Mobile용 라이선스 키를 입력하세요", Color.YELLOW)
+            Toast.makeText(this, "Mobile용 라이선스 키가 필요합니다", Toast.LENGTH_LONG).show()
+            return
+        }
         
         try {
             // V11: LicenseManager.initLicense 사용
@@ -114,7 +133,18 @@ class MainActivity : AppCompatActivity() {
                             addLog("❌ 라이선스 검증 실패!", Color.RED)
                             addLog("오류 타입: $errorClass", Color.RED)
                             addLog("메시지: $errorMsg", Color.RED)
-                            addLog("인터넷 연결을 확인하세요", Color.YELLOW)
+                            
+                            // 라이선스 키 정보 로그
+                            android.util.Log.e("MainActivity", "사용된 라이선스 키 (처음 30자): ${licenseKey.take(30)}...")
+                            android.util.Log.e("MainActivity", "사용된 라이선스 키 (마지막 30자): ...${licenseKey.takeLast(30)}")
+                            
+                            // Mobile 라이선스 오류인 경우 특별 안내
+                            if (errorMsg.contains("Mobile", ignoreCase = true) || errorMsg.contains("mismatch", ignoreCase = true)) {
+                                addLog("⚠️ Mobile용 라이선스 키가 필요합니다", Color.YELLOW)
+                                addLog("현재 키가 Desktop/Server용일 수 있습니다", Color.YELLOW)
+                            } else {
+                                addLog("인터넷 연결을 확인하세요", Color.YELLOW)
+                            }
                             
                             // 상세 로그 출력
                             android.util.Log.e("MainActivity", "Dynamsoft 라이선스 검증 실패", error)
