@@ -10,6 +10,8 @@ import com.dynamsoft.core.basic_structures.ImageData
 import com.dynamsoft.core.basic_structures.EnumImagePixelFormat
 import com.dynamsoft.dbr.DecodedBarcodesResult
 import com.dynamsoft.dbr.BarcodeResultItem
+import com.dynamsoft.core.basic_structures.Quadrilateral
+import com.dynamsoft.core.basic_structures.Point
 import com.chaquo.python.Python
 import java.nio.ByteBuffer
 
@@ -142,9 +144,9 @@ class QRCodeAnalyzer(
                                             
                                             // 바코드 위치 정보 추출
                                             val barcodeRect = try {
-                                                val location = barcodeItem.localizationResult
+                                                val location: Quadrilateral? = barcodeItem.location
                                                 if (location != null) {
-                                                    val points = location.resultPoints
+                                                    val points = location.points
                                                     if (points != null && points.size >= 4) {
                                                         // 4개 점에서 바운딩 박스 계산
                                                         var minX = Int.MAX_VALUE
@@ -152,7 +154,7 @@ class QRCodeAnalyzer(
                                                         var maxX = Int.MIN_VALUE
                                                         var maxY = Int.MIN_VALUE
                                                         
-                                                        for (point in points) {
+                                                        for (point: Point in points) {
                                                             val x = point.x.toInt()
                                                             val y = point.y.toInt()
                                                             minX = minOf(minX, x)
@@ -200,16 +202,16 @@ class QRCodeAnalyzer(
                                                     
                                                     // 바코드 위치 정보 추출
                                                     val barcodeRect = try {
-                                                        val location = barcodeItem.localizationResult
+                                                        val location: Quadrilateral? = barcodeItem.location
                                                         if (location != null) {
-                                                            val points = location.resultPoints
+                                                            val points = location.points
                                                             if (points != null && points.size >= 4) {
                                                                 var minX = Int.MAX_VALUE
                                                                 var minY = Int.MAX_VALUE
                                                                 var maxX = Int.MIN_VALUE
                                                                 var maxY = Int.MIN_VALUE
                                                                 
-                                                                for (point in points) {
+                                                                for (point: Point in points) {
                                                                     val x = point.x.toInt()
                                                                     val y = point.y.toInt()
                                                                     minX = minOf(minX, x)
