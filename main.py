@@ -45,7 +45,8 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QFileDialog, QTableWidget, QTableWidgetItem,
     QSplitter, QGroupBox, QGridLayout, QFrame, QHeaderView, QMessageBox,
     QScrollArea, QDialog, QCheckBox, QSlider, QLineEdit, QComboBox, QFormLayout,
-    QDialogButtonBox, QStyleOptionSlider, QDoubleSpinBox, QSpinBox, QInputDialog
+    QDialogButtonBox, QStyleOptionSlider, QDoubleSpinBox, QSpinBox, QInputDialog,
+    QSizePolicy
 )
 from PyQt6.QtCore import (
     QThread, pyqtSignal, Qt, QTimer, QObject, QMutex, QMutexLocker
@@ -1537,29 +1538,83 @@ class WebcamAIWorker(QThread):
 
 
 class WebcamVideoPlayer(QThread):
-    """웹캠용 비디오 플레이어 (base.py의 VideoPlayer와 유사)"""
+    """웹캠용 비디오 플레이어"""
     change_pixmap_signal = pyqtSignal(np.ndarray)
+    # 초기 하드웨어 설정값을 UI로 보내는 신호
+    initial_settings_signal = pyqtSignal(dict)
 
     def __init__(self, frame_queue):
         super().__init__()
         self.frame_queue = frame_queue
         self.running = True
         self.latest_ai_results = []
+        # UI에서 들어온 변경 요청을 담을 큐
+        self.command_queue = queue.Queue()
+        self.cap = None
+        self.resolution_queue = queue.Queue()  # 해상도 변경 요청 큐
+        self.current_width = 640
+        self.current_height = 480
 
     def update_ai_results(self, results):
         """AI 워커가 결과를 보내면 여기서 업데이트"""
         self.latest_ai_results = results
 
+    def update_setting(self, prop_id, value):
+        """UI에서 설정을 바꿀 때 호출"""
+        self.command_queue.put((prop_id, value))
+
     def run(self):
-        cap = cv2.VideoCapture(0)  # 웹캠 모드
+        # 1. 카메라 열기 (이때 하드웨어 기본 설정으로 열림)
+        self.cap = cv2.VideoCapture(0)
         
+        if not self.cap.isOpened():
+            return
+
+        # 초기 해상도 설정
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.current_width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.current_height)
+
+        # 2. 현재 하드웨어의 설정값을 읽어옴 (덮어쓰기 전!)
+        # 이 값들이 바로 '내 기본 하드웨어 설정'이 됩니다.
+        current_settings = {}
+        try:
+            current_settings = {
+                'brightness': self.cap.get(cv2.CAP_PROP_BRIGHTNESS),
+                'contrast': self.cap.get(cv2.CAP_PROP_CONTRAST),
+                'exposure': self.cap.get(cv2.CAP_PROP_EXPOSURE),
+                'auto_exposure': self.cap.get(cv2.CAP_PROP_AUTO_EXPOSURE),
+                'gain': self.cap.get(cv2.CAP_PROP_GAIN),
+                'focus': self.cap.get(cv2.CAP_PROP_FOCUS),
+                'autofocus': self.cap.get(cv2.CAP_PROP_AUTOFOCUS),
+                'width': int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                'height': int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+            }
+            # 실제 설정된 해상도 저장
+            self.current_width = current_settings['width']
+            self.current_height = current_settings['height']
+        except Exception as e:
+            pass
+        
+        # 3. 읽은 값을 UI로 전송 -> 슬라이더 초기화 및 '기본값'으로 저장됨
+        self.initial_settings_signal.emit(current_settings)
+
         fps = 30
         frame_interval = 1.0 / fps
 
-        while self.running and cap.isOpened():
+        while self.running and self.cap.isOpened():
             start_time = time.time()
-            
-            ret, frame = cap.read()
+
+            # 4. UI에서 변경 요청이 있으면 적용
+            try:
+                while not self.command_queue.empty():
+                    prop_id, value = self.command_queue.get_nowait()
+                    self.cap.set(prop_id, value)
+            except queue.Empty:
+                pass
+            except Exception as e:
+                pass
+
+            ret, frame = self.cap.read()
             if not ret:
                 time.sleep(0.01)
                 continue
@@ -1585,11 +1640,22 @@ class WebcamVideoPlayer(QThread):
             delay = max(0, frame_interval - processing_time)
             time.sleep(delay)
 
-        cap.release()
+        # 웹캠 모드 종료 시 원래 설정으로 복원
+        if self.cap is not None and self.cap.isOpened():
+            # 원래 설정 복원을 위한 신호 전송 (UI에서 처리)
+            pass
+        if self.cap is not None:
+            self.cap.release()
 
     def stop(self):
         self.running = False
         self.wait()
+    
+    def restore_original_settings(self):
+        """원래 설정으로 복원 (종료 시 호출)"""
+        if self.cap is not None and self.cap.isOpened():
+            # 원래 설정 복원은 UI에서 처리
+            pass
 
 
 class WebcamWindow(QMainWindow):
@@ -1605,17 +1671,146 @@ class WebcamWindow(QMainWindow):
         self.log_filter_mode = 'all'  # 'all', 'success', 'fail'
         self.all_log_entries = []  # 모든 로그 항목 저장 (필터링용)
 
-        # UI 구성
+        # UI 구성 - 전체를 스크롤 가능하게 만들기
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        
         self.central_widget = QWidget()
-        self.setCentralWidget(self.central_widget)
+        scroll_area.setWidget(self.central_widget)
+        self.setCentralWidget(scroll_area)
+        
         self.layout = QVBoxLayout(self.central_widget)
 
         # 비디오 레이블
         self.video_label = QLabel("웹캠 연결 중...")
         self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.video_label.setMinimumSize(640, 480)
+        self.video_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.video_label.setStyleSheet("QLabel { background-color: black; }")
-        self.layout.addWidget(self.video_label)
+        self.layout.addWidget(self.video_label, 0)  # stretch factor 0으로 설정
+
+        # 하드웨어 기본값 저장소
+        self.default_hw_settings = {}
+
+        # 하드웨어 전처리 옵션 섹션 (한번에 다 보이게)
+        hw_group = QGroupBox("⚙️ 하드웨어 전처리 옵션 (CPU 부하 0%)")
+        hw_layout = QGridLayout(hw_group)
+        # 반응형 레이아웃 설정: 라벨(0)은 고정, 슬라이더(1)는 확장, SpinBox(2)는 고정, 체크박스(3)는 고정
+        hw_layout.setColumnStretch(0, 0)  # 라벨: 고정 크기
+        hw_layout.setColumnStretch(1, 1)  # 슬라이더: 확장 가능
+        hw_layout.setColumnStretch(2, 0)  # SpinBox: 고정 크기
+        hw_layout.setColumnStretch(3, 0)  # 체크박스: 고정 크기
+        
+        # 밝기 (Brightness)
+        hw_layout.addWidget(QLabel("밝기 (Brightness):"), 0, 0)
+        self.brightness_slider = QSlider(Qt.Orientation.Horizontal)
+        self.brightness_slider.setMinimum(0)
+        self.brightness_slider.setMaximum(2550)  # 0-255를 10배로 확대 (소수점 한자리 지원)
+        self.brightness_slider.valueChanged.connect(self.on_brightness_slider_changed)
+        hw_layout.addWidget(self.brightness_slider, 0, 1)
+        self.brightness_spin = QDoubleSpinBox()
+        self.brightness_spin.setRange(0.0, 255.0)
+        self.brightness_spin.setDecimals(1)
+        self.brightness_spin.setSingleStep(0.1)
+        self.brightness_spin.setMinimumWidth(80)
+        self.brightness_spin.setMaximumWidth(100)
+        self.brightness_spin.valueChanged.connect(self.on_brightness_spin_changed)
+        hw_layout.addWidget(self.brightness_spin, 0, 2)
+        
+        # 노출 (Exposure)
+        hw_layout.addWidget(QLabel("노출 (Exposure):"), 1, 0)
+        self.exposure_slider = QSlider(Qt.Orientation.Horizontal)
+        self.exposure_slider.setMinimum(-130)  # -13.0을 10배로 확대
+        self.exposure_slider.setMaximum(10)  # 1.0을 10배로 확대
+        self.exposure_slider.valueChanged.connect(self.on_exposure_slider_changed)
+        hw_layout.addWidget(self.exposure_slider, 1, 1)
+        self.exposure_spin = QDoubleSpinBox()
+        self.exposure_spin.setRange(-13.0, 1.0)
+        self.exposure_spin.setDecimals(1)
+        self.exposure_spin.setSingleStep(0.1)
+        self.exposure_spin.setMinimumWidth(80)
+        self.exposure_spin.setMaximumWidth(100)
+        self.exposure_spin.valueChanged.connect(self.on_exposure_spin_changed)
+        hw_layout.addWidget(self.exposure_spin, 1, 2)
+        self.exposure_auto_check = QCheckBox("자동 노출")
+        self.exposure_auto_check.clicked.connect(self.on_exposure_auto_changed)
+        hw_layout.addWidget(self.exposure_auto_check, 1, 3)
+        
+        # 게인 (Gain)
+        hw_layout.addWidget(QLabel("게인 (Gain):"), 2, 0)
+        self.gain_slider = QSlider(Qt.Orientation.Horizontal)
+        self.gain_slider.setMinimum(0)
+        self.gain_slider.setMaximum(1000)  # 0-100을 10배로 확대
+        self.gain_slider.valueChanged.connect(self.on_gain_slider_changed)
+        hw_layout.addWidget(self.gain_slider, 2, 1)
+        self.gain_spin = QDoubleSpinBox()
+        self.gain_spin.setRange(0.0, 100.0)
+        self.gain_spin.setDecimals(1)
+        self.gain_spin.setSingleStep(0.1)
+        self.gain_spin.setMinimumWidth(80)
+        self.gain_spin.setMaximumWidth(100)
+        self.gain_spin.valueChanged.connect(self.on_gain_spin_changed)
+        hw_layout.addWidget(self.gain_spin, 2, 2)
+        
+        # 대비 (Contrast)
+        hw_layout.addWidget(QLabel("대비 (Contrast):"), 3, 0)
+        self.contrast_slider = QSlider(Qt.Orientation.Horizontal)
+        self.contrast_slider.setMinimum(0)
+        self.contrast_slider.setMaximum(2550)  # 0-255를 10배로 확대
+        self.contrast_slider.valueChanged.connect(self.on_contrast_slider_changed)
+        hw_layout.addWidget(self.contrast_slider, 3, 1)
+        self.contrast_spin = QDoubleSpinBox()
+        self.contrast_spin.setRange(0.0, 255.0)
+        self.contrast_spin.setDecimals(1)
+        self.contrast_spin.setSingleStep(0.1)
+        self.contrast_spin.setMinimumWidth(80)
+        self.contrast_spin.setMaximumWidth(100)
+        self.contrast_spin.valueChanged.connect(self.on_contrast_spin_changed)
+        hw_layout.addWidget(self.contrast_spin, 3, 2)
+        
+        # 초점 (Focus) - 가장 중요
+        hw_layout.addWidget(QLabel("초점 (Focus) ⭐:"), 4, 0)
+        self.focus_slider = QSlider(Qt.Orientation.Horizontal)
+        self.focus_slider.setMinimum(0)
+        self.focus_slider.setMaximum(2500)  # 0-250을 10배로 확대
+        self.focus_slider.valueChanged.connect(self.on_focus_slider_changed)
+        hw_layout.addWidget(self.focus_slider, 4, 1)
+        self.focus_spin = QDoubleSpinBox()
+        self.focus_spin.setRange(0.0, 250.0)
+        self.focus_spin.setDecimals(1)
+        self.focus_spin.setSingleStep(0.1)
+        self.focus_spin.setMinimumWidth(80)
+        self.focus_spin.setMaximumWidth(100)
+        self.focus_spin.valueChanged.connect(self.on_focus_spin_changed)
+        hw_layout.addWidget(self.focus_spin, 4, 2)
+        self.focus_auto_check = QCheckBox("자동 초점")
+        self.focus_auto_check.clicked.connect(self.on_focus_auto_changed)
+        hw_layout.addWidget(self.focus_auto_check, 4, 3)
+        
+        # 해상도 (Resolution) - 제일 아래
+        hw_layout.addWidget(QLabel("해상도 (Resolution):"), 5, 0)
+        self.resolution_combo = QComboBox()
+        self.resolution_combo.addItems([
+            "320x240 (QVGA)",
+            "640x480 (VGA)",
+            "800x600 (SVGA)",
+            "1024x768 (XGA)",
+            "1280x720 (HD)",
+            "1280x1024 (SXGA)",
+            "1920x1080 (Full HD)"
+        ])
+        self.resolution_combo.currentTextChanged.connect(self.on_resolution_changed)
+        hw_layout.addWidget(self.resolution_combo, 5, 1, 1, 2)
+        
+        # 기본값 되돌리기 버튼
+        self.btn_reset_all = QPushButton("↺ 모든 설정을 기본값으로 되돌리기")
+        self.btn_reset_all.clicked.connect(self.reset_to_default)
+        hw_layout.addWidget(self.btn_reset_all, 6, 0, 1, 4)
+        
+        # 옵션 섹션을 직접 추가 (스크롤 제한 없이 한번에 다 보이게)
+        self.layout.addWidget(hw_group, 0)
 
         # 로그 섹션
         log_group = QGroupBox("📋 데이터 로그")
@@ -1667,10 +1862,371 @@ class WebcamWindow(QMainWindow):
         self.ai_worker.result_ready.connect(self.on_ai_result)
         # 플레이어에도 결과 전달 (시각화용)
         self.ai_worker.result_ready.connect(self.player.update_ai_results)
+        # 초기 설정값 받기 연결
+        self.player.initial_settings_signal.connect(self.init_sliders)
 
         # 시작
         self.ai_worker.start()
         self.player.start()
+    
+    def init_sliders(self, settings):
+        """플레이어가 보낸 초기 하드웨어 값으로 슬라이더 세팅"""
+        # 1. 초기값 백업 (리셋 버튼용)
+        self.default_hw_settings = settings.copy()
+        
+
+        # 2. 슬라이더와 SpinBox에 값 적용 (신호 차단 후 적용하여 불필요한 set 방지)
+        self.brightness_slider.blockSignals(True)
+        self.brightness_spin.blockSignals(True)
+        self.exposure_slider.blockSignals(True)
+        self.exposure_spin.blockSignals(True)
+        self.gain_slider.blockSignals(True)
+        self.gain_spin.blockSignals(True)
+        self.contrast_slider.blockSignals(True)
+        self.contrast_spin.blockSignals(True)
+        self.focus_slider.blockSignals(True)
+        self.focus_spin.blockSignals(True)
+        self.exposure_auto_check.blockSignals(True)
+        self.focus_auto_check.blockSignals(True)
+
+        # 값 적용 (None이거나 범위를 벗어날 수 있으므로 예외처리 필요)
+        try:
+            # 해상도 설정
+            width = settings.get('width', 640)
+            height = settings.get('height', 480)
+            resolution_text = f"{width}x{height}"
+            # 현재 해상도에 맞는 항목 찾기
+            resolution_map = {
+                "320x240": 0,
+                "640x480": 1,
+                "800x600": 2,
+                "1024x768": 3,
+                "1280x720": 4,
+                "1280x1024": 5,
+                "1920x1080": 6
+            }
+            # 가장 가까운 해상도 찾기
+            closest_idx = 1  # 기본값: 640x480
+            min_diff = float('inf')
+            for res_text, idx in resolution_map.items():
+                w, h = map(int, res_text.split('x'))
+                diff = abs(w - width) + abs(h - height)
+                if diff < min_diff:
+                    min_diff = diff
+                    closest_idx = idx
+            self.resolution_combo.blockSignals(True)
+            self.resolution_combo.setCurrentIndex(closest_idx)
+            self.resolution_combo.blockSignals(False)
+            
+            # 밝기 (0-255)
+            brightness = settings.get('brightness', -1)
+            if brightness != -1 and 0 <= brightness <= 255:
+                self.brightness_slider.setValue(int(brightness * 10))
+                self.brightness_spin.setValue(brightness)
+            else:
+                self.brightness_spin.setValue(0.0)
+            
+            # 노출 (-13 ~ 1)
+            exposure = settings.get('exposure', 0)
+            auto_exposure = settings.get('auto_exposure', 1.0)
+            if auto_exposure == 1.0 or auto_exposure == 0.75:  # 자동 모드
+                self.exposure_auto_check.setChecked(True)
+                self.exposure_slider.setEnabled(False)
+                self.exposure_spin.setEnabled(False)
+                self.exposure_spin.setValue(0.0)
+            else:
+                self.exposure_auto_check.setChecked(False)
+                self.exposure_slider.setEnabled(True)
+                self.exposure_spin.setEnabled(True)
+                if -13 <= exposure <= 1:
+                    self.exposure_slider.setValue(int(exposure * 10))
+                    self.exposure_spin.setValue(exposure)
+                else:
+                    self.exposure_spin.setValue(0.0)
+            
+            # 게인 (0-100)
+            gain = settings.get('gain', -1)
+            if gain != -1 and 0 <= gain <= 100:
+                self.gain_slider.setValue(int(gain * 10))
+                self.gain_spin.setValue(gain)
+            else:
+                self.gain_spin.setValue(0.0)
+            
+            # 대비 (0-255)
+            contrast = settings.get('contrast', -1)
+            if contrast != -1 and 0 <= contrast <= 255:
+                self.contrast_slider.setValue(int(contrast * 10))
+                self.contrast_spin.setValue(contrast)
+            else:
+                self.contrast_spin.setValue(0.0)
+            
+            # 초점 (0-250)
+            focus = settings.get('focus', -1)
+            autofocus = settings.get('autofocus', 0)
+            if autofocus == 1:  # 자동 초점
+                self.focus_auto_check.setChecked(True)
+                self.focus_slider.setEnabled(False)
+                self.focus_spin.setEnabled(False)
+                self.focus_spin.setValue(0.0)
+            else:
+                self.focus_auto_check.setChecked(False)
+                self.focus_slider.setEnabled(True)
+                self.focus_spin.setEnabled(True)
+                if focus != -1 and 0 <= focus <= 250:
+                    self.focus_slider.setValue(int(focus * 10))
+                    self.focus_spin.setValue(focus)
+                else:
+                    self.focus_spin.setValue(0.0)
+                    
+        except Exception as e:
+            pass
+
+        self.brightness_slider.blockSignals(False)
+        self.brightness_spin.blockSignals(False)
+        self.exposure_slider.blockSignals(False)
+        self.exposure_spin.blockSignals(False)
+        self.gain_slider.blockSignals(False)
+        self.gain_spin.blockSignals(False)
+        self.contrast_slider.blockSignals(False)
+        self.contrast_spin.blockSignals(False)
+        self.focus_slider.blockSignals(False)
+        self.focus_spin.blockSignals(False)
+        self.exposure_auto_check.blockSignals(False)
+        self.focus_auto_check.blockSignals(False)
+    
+    def reset_to_default(self):
+        """처음 저장해둔 기본값으로 되돌리기"""
+        if not self.default_hw_settings:
+            return
+        
+        s = self.default_hw_settings
+        
+        # 슬라이더와 SpinBox 값 변경 -> valueChanged 신호 발생 -> Player가 카메라 설정 변경
+        self.brightness_slider.blockSignals(True)
+        self.brightness_spin.blockSignals(True)
+        self.exposure_slider.blockSignals(True)
+        self.exposure_spin.blockSignals(True)
+        self.gain_slider.blockSignals(True)
+        self.gain_spin.blockSignals(True)
+        self.contrast_slider.blockSignals(True)
+        self.contrast_spin.blockSignals(True)
+        self.focus_slider.blockSignals(True)
+        self.focus_spin.blockSignals(True)
+        self.exposure_auto_check.blockSignals(True)
+        self.focus_auto_check.blockSignals(True)
+        
+        try:
+            # 밝기
+            brightness = s.get('brightness', -1)
+            if brightness != -1 and 0 <= brightness <= 255:
+                self.brightness_slider.setValue(int(brightness * 10))
+                self.brightness_spin.setValue(brightness)
+                self.player.update_setting(cv2.CAP_PROP_BRIGHTNESS, brightness)
+            
+            # 노출
+            auto_exposure = s.get('auto_exposure', 1.0)
+            exposure = s.get('exposure', 0)
+            if auto_exposure == 1.0 or auto_exposure == 0.75:
+                self.exposure_auto_check.setChecked(True)
+                self.exposure_slider.setEnabled(False)
+                self.exposure_spin.setEnabled(False)
+                self.exposure_spin.setValue(0.0)
+                self.player.update_setting(cv2.CAP_PROP_AUTO_EXPOSURE, 1.0)
+            else:
+                self.exposure_auto_check.setChecked(False)
+                self.exposure_slider.setEnabled(True)
+                self.exposure_spin.setEnabled(True)
+                if -13 <= exposure <= 1:
+                    self.exposure_slider.setValue(int(exposure * 10))
+                    self.exposure_spin.setValue(exposure)
+                    self.player.update_setting(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+                    self.player.update_setting(cv2.CAP_PROP_EXPOSURE, exposure)
+            
+            # 게인
+            gain = s.get('gain', -1)
+            if gain != -1 and 0 <= gain <= 100:
+                self.gain_slider.setValue(int(gain * 10))
+                self.gain_spin.setValue(gain)
+                self.player.update_setting(cv2.CAP_PROP_GAIN, gain)
+            
+            # 대비
+            contrast = s.get('contrast', -1)
+            if contrast != -1 and 0 <= contrast <= 255:
+                self.contrast_slider.setValue(int(contrast * 10))
+                self.contrast_spin.setValue(contrast)
+                self.player.update_setting(cv2.CAP_PROP_CONTRAST, contrast)
+            
+            # 초점
+            autofocus = s.get('autofocus', 0)
+            focus = s.get('focus', -1)
+            if autofocus == 1:
+                self.focus_auto_check.setChecked(True)
+                self.focus_slider.setEnabled(False)
+                self.focus_spin.setEnabled(False)
+                self.focus_spin.setValue(0.0)
+                self.player.update_setting(cv2.CAP_PROP_AUTOFOCUS, 1)
+            else:
+                self.focus_auto_check.setChecked(False)
+                self.focus_slider.setEnabled(True)
+                self.focus_spin.setEnabled(True)
+                if focus != -1 and 0 <= focus <= 250:
+                    self.focus_slider.setValue(int(focus * 10))
+                    self.focus_spin.setValue(focus)
+                    self.player.update_setting(cv2.CAP_PROP_AUTOFOCUS, 0)
+                    self.player.update_setting(cv2.CAP_PROP_FOCUS, focus)
+            
+            # 해상도 복원
+            width = s.get('width', 640)
+            height = s.get('height', 480)
+            self.player.change_resolution(width, height)
+            # 콤보박스도 업데이트
+            resolution_text = f"{width}x{height}"
+            resolution_map = {
+                "320x240": 0,
+                "640x480": 1,
+                "800x600": 2,
+                "1024x768": 3,
+                "1280x720": 4,
+                "1280x1024": 5,
+                "1920x1080": 6
+            }
+            closest_idx = 1
+            min_diff = float('inf')
+            for res_text, idx in resolution_map.items():
+                w, h = map(int, res_text.split('x'))
+                diff = abs(w - width) + abs(h - height)
+                if diff < min_diff:
+                    min_diff = diff
+                    closest_idx = idx
+            self.resolution_combo.blockSignals(True)
+            self.resolution_combo.setCurrentIndex(closest_idx)
+            self.resolution_combo.blockSignals(False)
+        except Exception as e:
+            pass
+        
+        self.brightness_slider.blockSignals(False)
+        self.brightness_spin.blockSignals(False)
+        self.exposure_slider.blockSignals(False)
+        self.exposure_spin.blockSignals(False)
+        self.gain_slider.blockSignals(False)
+        self.gain_spin.blockSignals(False)
+        self.contrast_slider.blockSignals(False)
+        self.contrast_spin.blockSignals(False)
+        self.focus_slider.blockSignals(False)
+        self.focus_spin.blockSignals(False)
+        self.exposure_auto_check.blockSignals(False)
+        self.focus_auto_check.blockSignals(False)
+    
+    def on_resolution_changed(self, text):
+        """해상도 변경 핸들러"""
+        # 텍스트에서 해상도 추출 (예: "640x480 (VGA)" -> 640, 480)
+        try:
+            resolution_part = text.split(' ')[0]  # "640x480" 부분만 추출
+            width, height = map(int, resolution_part.split('x'))
+            self.player.change_resolution(width, height)
+        except Exception as e:
+            pass
+    
+    def on_brightness_slider_changed(self, value):
+        """밝기 슬라이더 변경 핸들러"""
+        brightness = value / 10.0
+        self.brightness_spin.blockSignals(True)
+        self.brightness_spin.setValue(brightness)
+        self.brightness_spin.blockSignals(False)
+        self.player.update_setting(cv2.CAP_PROP_BRIGHTNESS, brightness)
+    
+    def on_brightness_spin_changed(self, value):
+        """밝기 SpinBox 변경 핸들러"""
+        self.brightness_slider.blockSignals(True)
+        self.brightness_slider.setValue(int(value * 10))
+        self.brightness_slider.blockSignals(False)
+        self.player.update_setting(cv2.CAP_PROP_BRIGHTNESS, value)
+    
+    def on_exposure_slider_changed(self, value):
+        """노출 슬라이더 변경 핸들러"""
+        exposure = value / 10.0
+        self.exposure_spin.blockSignals(True)
+        self.exposure_spin.setValue(exposure)
+        self.exposure_spin.blockSignals(False)
+        self.player.update_setting(cv2.CAP_PROP_EXPOSURE, exposure)
+    
+    def on_exposure_spin_changed(self, value):
+        """노출 SpinBox 변경 핸들러"""
+        self.exposure_slider.blockSignals(True)
+        self.exposure_slider.setValue(int(value * 10))
+        self.exposure_slider.blockSignals(False)
+        self.player.update_setting(cv2.CAP_PROP_EXPOSURE, value)
+    
+    def on_exposure_auto_changed(self, checked):
+        """자동 노출 체크박스 변경 핸들러"""
+        if checked:
+            self.exposure_slider.setEnabled(False)
+            self.exposure_spin.setEnabled(False)
+            self.player.update_setting(cv2.CAP_PROP_AUTO_EXPOSURE, 1.0)
+        else:
+            self.exposure_slider.setEnabled(True)
+            self.exposure_spin.setEnabled(True)
+            self.player.update_setting(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # 수동 모드
+            # 현재 SpinBox 값 적용
+            self.on_exposure_spin_changed(self.exposure_spin.value())
+    
+    def on_gain_slider_changed(self, value):
+        """게인 슬라이더 변경 핸들러"""
+        gain = value / 10.0
+        self.gain_spin.blockSignals(True)
+        self.gain_spin.setValue(gain)
+        self.gain_spin.blockSignals(False)
+        self.player.update_setting(cv2.CAP_PROP_GAIN, gain)
+    
+    def on_gain_spin_changed(self, value):
+        """게인 SpinBox 변경 핸들러"""
+        self.gain_slider.blockSignals(True)
+        self.gain_slider.setValue(int(value * 10))
+        self.gain_slider.blockSignals(False)
+        self.player.update_setting(cv2.CAP_PROP_GAIN, value)
+    
+    def on_contrast_slider_changed(self, value):
+        """대비 슬라이더 변경 핸들러"""
+        contrast = value / 10.0
+        self.contrast_spin.blockSignals(True)
+        self.contrast_spin.setValue(contrast)
+        self.contrast_spin.blockSignals(False)
+        self.player.update_setting(cv2.CAP_PROP_CONTRAST, contrast)
+    
+    def on_contrast_spin_changed(self, value):
+        """대비 SpinBox 변경 핸들러"""
+        self.contrast_slider.blockSignals(True)
+        self.contrast_slider.setValue(int(value * 10))
+        self.contrast_slider.blockSignals(False)
+        self.player.update_setting(cv2.CAP_PROP_CONTRAST, value)
+    
+    def on_focus_slider_changed(self, value):
+        """초점 슬라이더 변경 핸들러"""
+        focus = value / 10.0
+        self.focus_spin.blockSignals(True)
+        self.focus_spin.setValue(focus)
+        self.focus_spin.blockSignals(False)
+        self.player.update_setting(cv2.CAP_PROP_FOCUS, focus)
+    
+    def on_focus_spin_changed(self, value):
+        """초점 SpinBox 변경 핸들러"""
+        self.focus_slider.blockSignals(True)
+        self.focus_slider.setValue(int(value * 10))
+        self.focus_slider.blockSignals(False)
+        self.player.update_setting(cv2.CAP_PROP_FOCUS, value)
+    
+    def on_focus_auto_changed(self, checked):
+        """자동 초점 체크박스 변경 핸들러"""
+        if checked:
+            self.focus_slider.setEnabled(False)
+            self.focus_spin.setEnabled(False)
+            self.player.update_setting(cv2.CAP_PROP_AUTOFOCUS, 1)
+        else:
+            self.focus_slider.setEnabled(True)
+            self.focus_spin.setEnabled(True)
+            self.player.update_setting(cv2.CAP_PROP_AUTOFOCUS, 0)
+            # 현재 SpinBox 값 적용
+            self.on_focus_spin_changed(self.focus_spin.value())
     
     def on_ai_result(self, results):
         """AI 결과 처리 및 로그 추가"""
@@ -1789,6 +2345,28 @@ class WebcamWindow(QMainWindow):
         return p
 
     def closeEvent(self, event):
+        # 웹캠 모드 종료 시 원래 설정으로 복원
+        if self.default_hw_settings and self.player.cap is not None and self.player.cap.isOpened():
+            try:
+                s = self.default_hw_settings
+                # 원래 설정으로 복원
+                if 'brightness' in s and s['brightness'] != -1:
+                    self.player.cap.set(cv2.CAP_PROP_BRIGHTNESS, s['brightness'])
+                if 'contrast' in s and s['contrast'] != -1:
+                    self.player.cap.set(cv2.CAP_PROP_CONTRAST, s['contrast'])
+                if 'gain' in s and s['gain'] != -1:
+                    self.player.cap.set(cv2.CAP_PROP_GAIN, s['gain'])
+                if 'auto_exposure' in s:
+                    self.player.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, s['auto_exposure'])
+                    if s['auto_exposure'] != 1.0 and s['auto_exposure'] != 0.75 and 'exposure' in s:
+                        self.player.cap.set(cv2.CAP_PROP_EXPOSURE, s['exposure'])
+                if 'autofocus' in s:
+                    self.player.cap.set(cv2.CAP_PROP_AUTOFOCUS, s['autofocus'])
+                    if s['autofocus'] != 1 and 'focus' in s and s['focus'] != -1:
+                        self.player.cap.set(cv2.CAP_PROP_FOCUS, s['focus'])
+            except Exception as e:
+                pass
+        
         self.player.stop()
         self.ai_worker.stop()
         # 메인 윈도우의 참조 정리
@@ -2102,6 +2680,12 @@ class QRAnalysisMainWindow(QMainWindow):
         self.log_table.setHorizontalHeaderLabels(["Timestamp", "Frame No", "Decoded Data", "Status"])
         self.log_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.log_table.setAlternatingRowColors(True)
+        # Vertical header 클릭 비활성화 (홀수 행 선택 버그 방지)
+        self.log_table.verticalHeader().setSectionsClickable(False)
+        self.log_table.verticalHeader().setDefaultSectionSize(25)
+        # 행 선택 모드 설정
+        self.log_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.log_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         # 10줄 정도 보이도록 높이 설정 (헤더 + 10행 * 약 30px)
         self.log_table.setMinimumHeight(330)
         self.log_table.setMaximumHeight(330)
