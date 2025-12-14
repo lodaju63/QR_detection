@@ -83,7 +83,7 @@ class MainActivity : AppCompatActivity() {
         try {
             // V11: LicenseManager.initLicense 사용
             LicenseManager.initLicense(licenseKey, this, object : LicenseVerificationListener {
-                override fun licenseVerificationCallback(isSuccess: Boolean, error: Exception?) {
+                override fun onLicenseVerified(isSuccess: Boolean, error: Exception?) {
                     runOnUiThread {
                         if (isSuccess) {
                             try {
@@ -268,8 +268,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
-        // V11: CaptureVisionRouter 정리
-        cvRouter?.recycle()
+        // V11: CaptureVisionRouter 정리 (V11에서는 자동으로 정리됨)
         cvRouter = null
     }
 

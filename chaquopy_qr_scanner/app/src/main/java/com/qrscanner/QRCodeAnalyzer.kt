@@ -5,11 +5,11 @@ import android.media.Image
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import com.dynamsoft.cvr.CaptureVisionRouter
+import com.dynamsoft.cvr.CapturedResult
 import com.dynamsoft.core.basic_structures.ImageData
 import com.dynamsoft.core.basic_structures.EnumImagePixelFormat
 import com.dynamsoft.dbr.DecodedBarcodesResult
 import com.dynamsoft.dbr.BarcodeResultItem
-import com.dynamsoft.core.basic_structures.CapturedResult
 import com.chaquo.python.Python
 import java.nio.ByteBuffer
 
@@ -103,18 +103,27 @@ class QRCodeAnalyzer(
                     
                     var hasResult = false
                     if (result != null) {
-                        val decodedResult: DecodedBarcodesResult? = result.decodedBarcodesResult
-                        if (decodedResult != null && decodedResult.items.isNotEmpty()) {
-                            for (item: BarcodeResultItem in decodedResult.items) {
-                                val text = item.text
-                                android.util.Log.d("QRCodeAnalyzer", "Found barcode: $text, format: ${item.format}")
-                                if (!text.isNullOrEmpty()) {
-                                    hasResult = true
-                                    onResult(text)
-                                    onDecodeAttempt?.invoke(attemptCount, true)
-                                    attemptCount = 0
-                                    imageProxy.close()
-                                    return
+                        // V11: CapturedResult에서 바코드 결과 접근
+                        val items = result.items
+                        if (items != null && items.isNotEmpty()) {
+                            for (item in items) {
+                                // DecodedBarcodesResult 타입인지 확인
+                                if (item is DecodedBarcodesResult) {
+                                    val barcodeItems = item.items
+                                    if (barcodeItems != null && barcodeItems.isNotEmpty()) {
+                                        for (barcodeItem: BarcodeResultItem in barcodeItems) {
+                                            val text = barcodeItem.text
+                                            android.util.Log.d("QRCodeAnalyzer", "Found barcode: $text, format: ${barcodeItem.format}")
+                                            if (!text.isNullOrEmpty()) {
+                                                hasResult = true
+                                                onResult(text)
+                                                onDecodeAttempt?.invoke(attemptCount, true)
+                                                attemptCount = 0
+                                                imageProxy.close()
+                                                return
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
