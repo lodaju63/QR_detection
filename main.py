@@ -1844,6 +1844,12 @@ class WebcamWindow(QMainWindow):
         self.log_table.setHorizontalHeaderLabels(["Timestamp", "Frame No", "Decoded Data", "Status"])
         self.log_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.log_table.setAlternatingRowColors(True)
+        # Vertical header 클릭 비활성화 (홀수 행 선택 버그 방지)
+        self.log_table.verticalHeader().setSectionsClickable(False)
+        self.log_table.verticalHeader().setDefaultSectionSize(25)
+        # 행 선택 모드 설정
+        self.log_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.log_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.log_table.setMinimumHeight(200)
         self.log_table.setMaximumHeight(200)
         
@@ -2267,10 +2273,43 @@ class WebcamWindow(QMainWindow):
                 row_count = self.log_table.rowCount()
                 self.log_table.insertRow(row_count)
                 
-                self.log_table.setItem(row_count, 0, QTableWidgetItem(entry['timestamp']))
-                self.log_table.setItem(row_count, 1, QTableWidgetItem(str(entry['frame_no'])))
-                self.log_table.setItem(row_count, 2, QTableWidgetItem(entry['decoded_data'][:50]))
-                self.log_table.setItem(row_count, 3, QTableWidgetItem(entry['status']))
+                # 데이터 정리 (모든 공백 제거 - 앞뒤 공백 및 내부 불필요한 공백)
+                # 저장된 데이터도 다시 한 번 정리 (이전에 저장된 데이터에 공백이 있을 수 있음)
+                # 먼저 공백 제거 후 슬라이싱 (슬라이싱 후 공백 제거하면 문제 발생 가능)
+                decoded_data_raw = ' '.join(str(entry.get('decoded_data', '')).split())
+                decoded_data = decoded_data_raw[:50] if len(decoded_data_raw) > 50 else decoded_data_raw
+                # 슬라이싱 후에도 다시 한 번 공백 제거 (안전장치)
+                decoded_data = ' '.join(decoded_data.split())
+                
+                timestamp = ' '.join(str(entry.get('timestamp', '')).split())
+                frame_no = ' '.join(str(entry.get('frame_no', '')).split())
+                status = ' '.join(str(entry.get('status', '')).split())
+                
+                # 모든 값에서 앞뒤 공백 완전 제거
+                timestamp = timestamp.strip()
+                frame_no = frame_no.strip()
+                decoded_data = decoded_data.strip()
+                status = status.strip()
+                
+                # QTableWidgetItem 생성 및 텍스트 정렬 설정 (모든 행에 동일한 설정 적용)
+                # 빈 문자열이 아닌 실제 값으로 생성하여 공백 문제 방지
+                item0 = QTableWidgetItem(str(timestamp).strip() if timestamp else "")
+                item0.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self.log_table.setItem(row_count, 0, item0)
+                
+                # Frame No - 공백 완전 제거 후 설정
+                frame_no_str = str(frame_no).strip() if frame_no else ""
+                item1 = QTableWidgetItem(frame_no_str)
+                item1.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self.log_table.setItem(row_count, 1, item1)
+                
+                item2 = QTableWidgetItem(str(decoded_data).strip() if decoded_data else "")
+                item2.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self.log_table.setItem(row_count, 2, item2)
+                
+                item3 = QTableWidgetItem(str(status).strip() if status else "")
+                item3.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self.log_table.setItem(row_count, 3, item3)
         
         self.log_table.scrollToBottom()
     
@@ -2278,13 +2317,19 @@ class WebcamWindow(QMainWindow):
         """로그 테이블에 항목 추가"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         
-        # 모든 로그 항목을 저장
+        # 데이터 정리 (저장 시점부터 공백 제거)
+        timestamp_clean = ' '.join(str(timestamp).split())
+        frame_no_clean = ' '.join(str(frame_no).split())
+        decoded_data_clean = ' '.join(str(decoded_data).split())
+        status_clean = ' '.join(str(status).split())
+        
+        # 모든 로그 항목을 저장 (정리된 데이터로 저장)
         log_entry = {
-            'timestamp': timestamp,
-            'frame_no': frame_no,
-            'decoded_data': decoded_data,
-            'status': status,
-            'is_success': '✅' in status
+            'timestamp': timestamp_clean,
+            'frame_no': frame_no_clean,
+            'decoded_data': decoded_data_clean,
+            'status': status_clean,
+            'is_success': '✅' in status_clean
         }
         self.all_log_entries.append(log_entry)
         
@@ -2305,10 +2350,25 @@ class WebcamWindow(QMainWindow):
             row_count = self.log_table.rowCount()
             self.log_table.insertRow(row_count)
             
-            self.log_table.setItem(row_count, 0, QTableWidgetItem(timestamp))
-            self.log_table.setItem(row_count, 1, QTableWidgetItem(str(frame_no)))
-            self.log_table.setItem(row_count, 2, QTableWidgetItem(decoded_data[:50]))
-            self.log_table.setItem(row_count, 3, QTableWidgetItem(status))
+            # 이미 정리된 변수 사용 (timestamp_clean, frame_no_clean 등)
+            decoded_data_display = decoded_data_clean[:50] if len(decoded_data_clean) > 50 else decoded_data_clean
+            
+            # QTableWidgetItem 생성 및 텍스트 정렬 설정
+            item0 = QTableWidgetItem(timestamp_clean)
+            item0.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.log_table.setItem(row_count, 0, item0)
+            
+            item1 = QTableWidgetItem(frame_no_clean)
+            item1.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.log_table.setItem(row_count, 1, item1)
+            
+            item2 = QTableWidgetItem(decoded_data_display)
+            item2.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.log_table.setItem(row_count, 2, item2)
+            
+            item3 = QTableWidgetItem(status_clean)
+            item3.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.log_table.setItem(row_count, 3, item3)
             
             # 자동 스크롤
             self.log_table.scrollToBottom()
@@ -3123,9 +3183,15 @@ class QRAnalysisMainWindow(QMainWindow):
         }
         QTableWidget::item {
             padding: 5px;
+            color: #e0e0e0;
         }
         QTableWidget::item:alternate {
             background-color: #252525;
+            color: #e0e0e0;
+            padding: 5px;
+        }
+        QTableWidget::item:selected {
+            background-color: #404040;
         }
         """
         self.setStyleSheet(dark_stylesheet)
@@ -3691,10 +3757,43 @@ class QRAnalysisMainWindow(QMainWindow):
                 row_count = self.log_table.rowCount()
                 self.log_table.insertRow(row_count)
                 
-                self.log_table.setItem(row_count, 0, QTableWidgetItem(entry['timestamp']))
-                self.log_table.setItem(row_count, 1, QTableWidgetItem(str(entry['frame_no'])))
-                self.log_table.setItem(row_count, 2, QTableWidgetItem(entry['decoded_data'][:50]))
-                self.log_table.setItem(row_count, 3, QTableWidgetItem(entry['status']))
+                # 데이터 정리 (모든 공백 제거 - 앞뒤 공백 및 내부 불필요한 공백)
+                # 저장된 데이터도 다시 한 번 정리 (이전에 저장된 데이터에 공백이 있을 수 있음)
+                # 먼저 공백 제거 후 슬라이싱 (슬라이싱 후 공백 제거하면 문제 발생 가능)
+                decoded_data_raw = ' '.join(str(entry.get('decoded_data', '')).split())
+                decoded_data = decoded_data_raw[:50] if len(decoded_data_raw) > 50 else decoded_data_raw
+                # 슬라이싱 후에도 다시 한 번 공백 제거 (안전장치)
+                decoded_data = ' '.join(decoded_data.split())
+                
+                timestamp = ' '.join(str(entry.get('timestamp', '')).split())
+                frame_no = ' '.join(str(entry.get('frame_no', '')).split())
+                status = ' '.join(str(entry.get('status', '')).split())
+                
+                # 모든 값에서 앞뒤 공백 완전 제거
+                timestamp = timestamp.strip()
+                frame_no = frame_no.strip()
+                decoded_data = decoded_data.strip()
+                status = status.strip()
+                
+                # QTableWidgetItem 생성 및 텍스트 정렬 설정 (모든 행에 동일한 설정 적용)
+                # 빈 문자열이 아닌 실제 값으로 생성하여 공백 문제 방지
+                item0 = QTableWidgetItem(str(timestamp).strip() if timestamp else "")
+                item0.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self.log_table.setItem(row_count, 0, item0)
+                
+                # Frame No - 공백 완전 제거 후 설정
+                frame_no_str = str(frame_no).strip() if frame_no else ""
+                item1 = QTableWidgetItem(frame_no_str)
+                item1.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self.log_table.setItem(row_count, 1, item1)
+                
+                item2 = QTableWidgetItem(str(decoded_data).strip() if decoded_data else "")
+                item2.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self.log_table.setItem(row_count, 2, item2)
+                
+                item3 = QTableWidgetItem(str(status).strip() if status else "")
+                item3.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self.log_table.setItem(row_count, 3, item3)
         
         # 자동 스크롤
         self.log_table.scrollToBottom()
@@ -3790,13 +3889,19 @@ class QRAnalysisMainWindow(QMainWindow):
         """로그 테이블에 항목 추가"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         
-        # 모든 로그 항목을 저장
+        # 데이터 정리 (저장 시점부터 공백 제거)
+        timestamp_clean = ' '.join(str(timestamp).split())
+        frame_no_clean = ' '.join(str(frame_no).split())
+        decoded_data_clean = ' '.join(str(decoded_data).split())
+        status_clean = ' '.join(str(status).split())
+        
+        # 모든 로그 항목을 저장 (정리된 데이터로 저장)
         log_entry = {
-            'timestamp': timestamp,
-            'frame_no': frame_no,
-            'decoded_data': decoded_data,
-            'status': status,
-            'is_success': '✅' in status
+            'timestamp': timestamp_clean,
+            'frame_no': frame_no_clean,
+            'decoded_data': decoded_data_clean,
+            'status': status_clean,
+            'is_success': '✅' in status_clean
         }
         self.all_log_entries.append(log_entry)
         
@@ -3817,10 +3922,25 @@ class QRAnalysisMainWindow(QMainWindow):
             row_count = self.log_table.rowCount()
             self.log_table.insertRow(row_count)
             
-            self.log_table.setItem(row_count, 0, QTableWidgetItem(timestamp))
-            self.log_table.setItem(row_count, 1, QTableWidgetItem(str(frame_no)))
-            self.log_table.setItem(row_count, 2, QTableWidgetItem(decoded_data[:50]))
-            self.log_table.setItem(row_count, 3, QTableWidgetItem(status))
+            # 이미 정리된 변수 사용 (timestamp_clean, frame_no_clean 등)
+            decoded_data_display = decoded_data_clean[:50] if len(decoded_data_clean) > 50 else decoded_data_clean
+            
+            # QTableWidgetItem 생성 및 텍스트 정렬 설정
+            item0 = QTableWidgetItem(timestamp_clean)
+            item0.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.log_table.setItem(row_count, 0, item0)
+            
+            item1 = QTableWidgetItem(frame_no_clean)
+            item1.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.log_table.setItem(row_count, 1, item1)
+            
+            item2 = QTableWidgetItem(decoded_data_display)
+            item2.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.log_table.setItem(row_count, 2, item2)
+            
+            item3 = QTableWidgetItem(status_clean)
+            item3.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.log_table.setItem(row_count, 3, item3)
             
             # 자동 스크롤
             self.log_table.scrollToBottom()

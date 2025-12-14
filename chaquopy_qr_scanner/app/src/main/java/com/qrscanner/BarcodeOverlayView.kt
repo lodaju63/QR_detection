@@ -36,52 +36,39 @@ class BarcodeOverlayView @JvmOverloads constructor(
         super.onDraw(canvas)
         
         barcodeRect?.let { rect ->
-            // 이미지 좌표를 화면 좌표로 변환
-            val previewView = parent as? View
-            if (previewView != null) {
-                val scaleX = width.toFloat() / previewView.width.toFloat()
-                val scaleY = height.toFloat() / previewView.height.toFloat()
-                
-                val screenRect = Rect(
-                    (rect.left * scaleX).toInt(),
-                    (rect.top * scaleY).toInt(),
-                    (rect.right * scaleX).toInt(),
-                    (rect.bottom * scaleY).toInt()
-                )
-                
-                // 바코드 박스 그리기
-                canvas.drawRect(screenRect, paint)
+            // 이미 변환된 화면 좌표를 그대로 사용
+            // 바코드 박스 그리기
+            canvas.drawRect(rect, paint)
                 
                 // 모서리에 작은 사각형 그리기 (시각적 강조)
                 val cornerSize = 30f
                 paint.strokeWidth = 6f
                 
                 // 왼쪽 위
-                canvas.drawLine(screenRect.left.toFloat(), screenRect.top.toFloat(),
-                    screenRect.left + cornerSize, screenRect.top.toFloat(), paint)
-                canvas.drawLine(screenRect.left.toFloat(), screenRect.top.toFloat(),
-                    screenRect.left.toFloat(), screenRect.top + cornerSize, paint)
+                canvas.drawLine(rect.left.toFloat(), rect.top.toFloat(),
+                    rect.left + cornerSize, rect.top.toFloat(), paint)
+                canvas.drawLine(rect.left.toFloat(), rect.top.toFloat(),
+                    rect.left.toFloat(), rect.top + cornerSize, paint)
                 
                 // 오른쪽 위
-                canvas.drawLine(screenRect.right.toFloat(), screenRect.top.toFloat(),
-                    screenRect.right - cornerSize, screenRect.top.toFloat(), paint)
-                canvas.drawLine(screenRect.right.toFloat(), screenRect.top.toFloat(),
-                    screenRect.right.toFloat(), screenRect.top + cornerSize, paint)
+                canvas.drawLine(rect.right.toFloat(), rect.top.toFloat(),
+                    rect.right - cornerSize, rect.top.toFloat(), paint)
+                canvas.drawLine(rect.right.toFloat(), rect.top.toFloat(),
+                    rect.right.toFloat(), rect.top + cornerSize, paint)
                 
                 // 왼쪽 아래
-                canvas.drawLine(screenRect.left.toFloat(), screenRect.bottom.toFloat(),
-                    screenRect.left + cornerSize, screenRect.bottom.toFloat(), paint)
-                canvas.drawLine(screenRect.left.toFloat(), screenRect.bottom.toFloat(),
-                    screenRect.left.toFloat(), screenRect.bottom - cornerSize, paint)
+                canvas.drawLine(rect.left.toFloat(), rect.bottom.toFloat(),
+                    rect.left + cornerSize, rect.bottom.toFloat(), paint)
+                canvas.drawLine(rect.left.toFloat(), rect.bottom.toFloat(),
+                    rect.left.toFloat(), rect.bottom - cornerSize, paint)
                 
                 // 오른쪽 아래
-                canvas.drawLine(screenRect.right.toFloat(), screenRect.bottom.toFloat(),
-                    screenRect.right - cornerSize, screenRect.bottom.toFloat(), paint)
-                canvas.drawLine(screenRect.right.toFloat(), screenRect.bottom.toFloat(),
-                    screenRect.right.toFloat(), screenRect.bottom - cornerSize, paint)
+                canvas.drawLine(rect.right.toFloat(), rect.bottom.toFloat(),
+                    rect.right - cornerSize, rect.bottom.toFloat(), paint)
+                canvas.drawLine(rect.right.toFloat(), rect.bottom.toFloat(),
+                    rect.right.toFloat(), rect.bottom - cornerSize, paint)
                 
                 paint.strokeWidth = 8f
-            }
         }
     }
 }
