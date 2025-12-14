@@ -1735,20 +1735,23 @@ class WebcamWindow(QMainWindow):
                 decoded_data = decoded_data.strip()
                 status = status.strip()
                 
-                # QTableWidgetItem 생성 및 텍스트 정렬 설정
-                item0 = QTableWidgetItem(timestamp)
+                # QTableWidgetItem 생성 및 텍스트 정렬 설정 (모든 행에 동일한 설정 적용)
+                # 빈 문자열이 아닌 실제 값으로 생성하여 공백 문제 방지
+                item0 = QTableWidgetItem(str(timestamp).strip() if timestamp else "")
                 item0.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 self.log_table.setItem(row_count, 0, item0)
                 
-                item1 = QTableWidgetItem(frame_no)
+                # Frame No - 공백 완전 제거 후 설정
+                frame_no_str = str(frame_no).strip() if frame_no else ""
+                item1 = QTableWidgetItem(frame_no_str)
                 item1.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 self.log_table.setItem(row_count, 1, item1)
                 
-                item2 = QTableWidgetItem(decoded_data)
+                item2 = QTableWidgetItem(str(decoded_data).strip() if decoded_data else "")
                 item2.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 self.log_table.setItem(row_count, 2, item2)
                 
-                item3 = QTableWidgetItem(status)
+                item3 = QTableWidgetItem(str(status).strip() if status else "")
                 item3.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 self.log_table.setItem(row_count, 3, item3)
         
@@ -2602,9 +2605,15 @@ class QRAnalysisMainWindow(QMainWindow):
         }
         QTableWidget::item {
             padding: 5px;
+            color: #e0e0e0;
         }
         QTableWidget::item:alternate {
             background-color: #252525;
+            color: #e0e0e0;
+            padding: 5px;
+        }
+        QTableWidget::item:selected {
+            background-color: #404040;
         }
         """
         self.setStyleSheet(dark_stylesheet)
@@ -3188,20 +3197,23 @@ class QRAnalysisMainWindow(QMainWindow):
                 decoded_data = decoded_data.strip()
                 status = status.strip()
                 
-                # QTableWidgetItem 생성 및 텍스트 정렬 설정
-                item0 = QTableWidgetItem(timestamp)
+                # QTableWidgetItem 생성 및 텍스트 정렬 설정 (모든 행에 동일한 설정 적용)
+                # 빈 문자열이 아닌 실제 값으로 생성하여 공백 문제 방지
+                item0 = QTableWidgetItem(str(timestamp).strip() if timestamp else "")
                 item0.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 self.log_table.setItem(row_count, 0, item0)
                 
-                item1 = QTableWidgetItem(frame_no)
+                # Frame No - 공백 완전 제거 후 설정
+                frame_no_str = str(frame_no).strip() if frame_no else ""
+                item1 = QTableWidgetItem(frame_no_str)
                 item1.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 self.log_table.setItem(row_count, 1, item1)
                 
-                item2 = QTableWidgetItem(decoded_data)
+                item2 = QTableWidgetItem(str(decoded_data).strip() if decoded_data else "")
                 item2.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 self.log_table.setItem(row_count, 2, item2)
                 
-                item3 = QTableWidgetItem(status)
+                item3 = QTableWidgetItem(str(status).strip() if status else "")
                 item3.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 self.log_table.setItem(row_count, 3, item3)
         
