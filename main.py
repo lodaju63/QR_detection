@@ -2340,8 +2340,8 @@ class WebcamWindow(QMainWindow):
         
         # 로그 테이블
         self.log_table = QTableWidget()
-        self.log_table.setColumnCount(4)
-        self.log_table.setHorizontalHeaderLabels(["Timestamp", "Frame No", "Decoded Data", "Status"])
+        self.log_table.setColumnCount(5)
+        self.log_table.setHorizontalHeaderLabels(["Timestamp", "Frame No", "Decoded Data", "Status", "Confidence"])
         self.log_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.log_table.setAlternatingRowColors(True)
         # Vertical header 클릭 비활성화 (홀수 행 선택 버그 방지)
@@ -2784,12 +2784,14 @@ class WebcamWindow(QMainWindow):
                 timestamp = ' '.join(str(entry.get('timestamp', '')).split())
                 frame_no = ' '.join(str(entry.get('frame_no', '')).split())
                 status = ' '.join(str(entry.get('status', '')).split())
+                confidence = ' '.join(str(entry.get('confidence', '-')).split())
                 
                 # 모든 값에서 앞뒤 공백 완전 제거
                 timestamp = timestamp.strip()
                 frame_no = frame_no.strip()
                 decoded_data = decoded_data.strip()
                 status = status.strip()
+                confidence = confidence.strip()
                 
                 # QTableWidgetItem 생성 및 텍스트 정렬 설정 (모든 행에 동일한 설정 적용)
                 # 빈 문자열이 아닌 실제 값으로 생성하여 공백 문제 방지
@@ -2810,6 +2812,10 @@ class WebcamWindow(QMainWindow):
                 item3 = QTableWidgetItem(str(status).strip() if status else "")
                 item3.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 self.log_table.setItem(row_count, 3, item3)
+                
+                item4 = QTableWidgetItem(str(confidence).strip() if confidence else "-")
+                item4.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self.log_table.setItem(row_count, 4, item4)
         
         self.log_table.scrollToBottom()
     
@@ -3249,8 +3255,8 @@ class QRAnalysisMainWindow(QMainWindow):
         log_layout.addLayout(log_filter_layout)
         
         self.log_table = QTableWidget()
-        self.log_table.setColumnCount(4)
-        self.log_table.setHorizontalHeaderLabels(["Timestamp", "Frame No", "Decoded Data", "Status"])
+        self.log_table.setColumnCount(5)
+        self.log_table.setHorizontalHeaderLabels(["Timestamp", "Frame No", "Decoded Data", "Status", "Confidence"])
         self.log_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.log_table.setAlternatingRowColors(True)
         # Vertical header 클릭 비활성화 (홀수 행 선택 버그 방지)
@@ -4230,10 +4236,11 @@ class QRAnalysisMainWindow(QMainWindow):
         
         # 로그 테이블 업데이트 (성공 및 실패 모두 기록)
         for det in detections:
+            confidence = det.get('confidence', 0.0)
             if det['success']:
-                self._add_log_entry(frame_idx, det['text'], "✅ 성공")
+                self._add_log_entry(frame_idx, det['text'], "✅ 성공", confidence)
             else:
-                self._add_log_entry(frame_idx, "인식 실패", "❌ 실패")
+                self._add_log_entry(frame_idx, "인식 실패", "❌ 실패", confidence)
     
     def on_processing_finished(self):
         """처리 완료"""
@@ -4470,7 +4477,7 @@ class QRAnalysisMainWindow(QMainWindow):
             f"<b>FPS</b> <span style='color:#ff00ff;'>{self.current_fps}</span>"
         )
     
-    def _add_log_entry(self, frame_no: int, decoded_data: str, status: str):
+    def _add_log_entry(self, frame_no: int, decoded_data: str, status: str, confidence: float = 0.0):
         """로그 테이블에 항목 추가"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         
@@ -4479,6 +4486,7 @@ class QRAnalysisMainWindow(QMainWindow):
         frame_no_clean = ' '.join(str(frame_no).split())
         decoded_data_clean = ' '.join(str(decoded_data).split())
         status_clean = ' '.join(str(status).split())
+        confidence_str = f"{confidence:.2f}" if confidence > 0 else "-"
         
         # 모든 로그 항목을 저장 (정리된 데이터로 저장)
         log_entry = {
@@ -4486,6 +4494,7 @@ class QRAnalysisMainWindow(QMainWindow):
             'frame_no': frame_no_clean,
             'decoded_data': decoded_data_clean,
             'status': status_clean,
+            'confidence': confidence_str,
             'is_success': '✅' in status_clean
         }
         self.all_log_entries.append(log_entry)
@@ -4526,6 +4535,10 @@ class QRAnalysisMainWindow(QMainWindow):
             item3 = QTableWidgetItem(status_clean)
             item3.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             self.log_table.setItem(row_count, 3, item3)
+            
+            item4 = QTableWidgetItem(confidence_str)
+            item4.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.log_table.setItem(row_count, 4, item4)
             
             # 자동 스크롤
             self.log_table.scrollToBottom()
