@@ -2043,7 +2043,7 @@ class WebcamVideoPlayer(QThread):
     # 초기 하드웨어 설정값을 UI로 보내는 신호
     initial_settings_signal = pyqtSignal(dict)
 
-    def __init__(self, frame_queue):
+    def __init__(self, frame_queue, camera_source=0):
         super().__init__()
         self.frame_queue = frame_queue
         self.running = True
@@ -2054,6 +2054,7 @@ class WebcamVideoPlayer(QThread):
         self.resolution_queue = queue.Queue()  # 해상도 변경 요청 큐
         self.current_width = 640
         self.current_height = 480
+        self.camera_source = camera_source  # 0 또는 IP 웹캠 URL
 
     def update_ai_results(self, results):
         """AI 워커가 결과를 보내면 여기서 업데이트"""
@@ -2065,7 +2066,19 @@ class WebcamVideoPlayer(QThread):
 
     def run(self):
         # 1. 카메라 열기 (이때 하드웨어 기본 설정으로 열림)
-        self.cap = cv2.VideoCapture(0)
+        # camera_source가 숫자 문자열이면 int로 변환, 아니면 URL로 사용
+        try:
+            if isinstance(self.camera_source, str) and self.camera_source.isdigit():
+                camera_idx = int(self.camera_source)
+            elif isinstance(self.camera_source, int):
+                camera_idx = self.camera_source
+            else:
+                # URL인 경우 (IP 웹캠)
+                camera_idx = self.camera_source
+        except:
+            camera_idx = 0
+        
+        self.cap = cv2.VideoCapture(camera_idx)
         
         if not self.cap.isOpened():
             return
@@ -2165,11 +2178,20 @@ class WebcamWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("웹캠 QR 분석")
         self.resize(1280, 900)
+        
+        # 모델 저장
+        self.yolo_model = yolo_model
+        self.dbr_reader = dbr_reader
 
         # 로그 관련 변수
         self.frame_counter = 0
         self.log_filter_mode = 'all'  # 'all', 'success', 'fail'
         self.all_log_entries = []  # 모든 로그 항목 저장 (필터링용)
+        
+        # 스레드 변수 초기화
+        self.ai_worker = None
+        self.player = None
+        self.frame_queue = queue.Queue(maxsize=1)
 
         # UI 구성 - 전체를 스크롤 가능하게 만들기
         scroll_area = QScrollArea()
@@ -2190,6 +2212,22 @@ class WebcamWindow(QMainWindow):
         self.video_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.video_label.setStyleSheet("QLabel { background-color: black; }")
         self.layout.addWidget(self.video_label, 0)  # stretch factor 0으로 설정
+
+        # 카메라 소스 설정 섹션
+        camera_group = QGroupBox("📹 카메라 설정")
+        camera_layout = QHBoxLayout(camera_group)
+        
+        camera_layout.addWidget(QLabel("카메라 소스:"))
+        self.camera_source_input = QLineEdit()
+        self.camera_source_input.setPlaceholderText("0 (로컬 웹캠) 또는 http://IP:포트/video")
+        self.camera_source_input.setText("0")  # 기본값: 로컬 웹캠
+        camera_layout.addWidget(self.camera_source_input)
+        
+        self.btn_connect_camera = QPushButton("연결")
+        self.btn_connect_camera.clicked.connect(self._reconnect_camera)
+        camera_layout.addWidget(self.btn_connect_camera)
+        
+        self.layout.addWidget(camera_group)
 
         # 하드웨어 기본값 저장소
         self.default_hw_settings = {}
@@ -2356,13 +2394,41 @@ class WebcamWindow(QMainWindow):
         log_layout.addWidget(self.log_table)
         self.layout.addWidget(log_group)
 
-        # 큐 생성
-        self.frame_queue = queue.Queue(maxsize=1)
+        # 초기 연결 (UI 생성 완료 후)
+        self._reconnect_camera()
 
-        # 스레드 생성
-        self.ai_worker = WebcamAIWorker(self.frame_queue, yolo_model, dbr_reader)
-        self.player = WebcamVideoPlayer(self.frame_queue)
+    def _get_camera_source(self):
+        """카메라 소스 가져오기"""
+        text = self.camera_source_input.text().strip()
+        if not text:
+            return 0
+        # 숫자만 있으면 int로 변환, 아니면 URL로 사용
+        if text.isdigit():
+            return int(text)
+        return text
 
+    def _reconnect_camera(self):
+        """카메라 재연결"""
+        # 기존 스레드가 있으면 종료
+        if self.player:
+            self.player.stop()
+            self.player.wait()
+        if self.ai_worker:
+            self.ai_worker.stop()
+            self.ai_worker.wait()
+        
+        # 큐 초기화
+        while not self.frame_queue.empty():
+            try:
+                self.frame_queue.get_nowait()
+            except:
+                break
+        
+        # 새로운 카메라 소스로 스레드 생성
+        camera_source = self._get_camera_source()
+        self.ai_worker = WebcamAIWorker(self.frame_queue, self.yolo_model, self.dbr_reader)
+        self.player = WebcamVideoPlayer(self.frame_queue, camera_source)
+        
         # 시그널 연결
         self.player.change_pixmap_signal.connect(self.update_image)
         self.ai_worker.result_ready.connect(self.on_ai_result)
@@ -2370,10 +2436,12 @@ class WebcamWindow(QMainWindow):
         self.ai_worker.result_ready.connect(self.player.update_ai_results)
         # 초기 설정값 받기 연결
         self.player.initial_settings_signal.connect(self.init_sliders)
-
+        
         # 시작
         self.ai_worker.start()
         self.player.start()
+        
+        QMessageBox.information(self, "연결", f"카메라 연결 시도 중...\n소스: {camera_source}")
     
     def init_sliders(self, settings):
         """플레이어가 보낸 초기 하드웨어 값으로 슬라이더 세팅"""
@@ -2912,7 +2980,7 @@ class WebcamWindow(QMainWindow):
 
     def closeEvent(self, event):
         # 웹캠 모드 종료 시 원래 설정으로 복원
-        if self.default_hw_settings and self.player.cap is not None and self.player.cap.isOpened():
+        if self.player and self.default_hw_settings and self.player.cap is not None and self.player.cap.isOpened():
             try:
                 s = self.default_hw_settings
                 # 원래 설정으로 복원
