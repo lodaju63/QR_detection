@@ -84,6 +84,236 @@ class NoWheelSlider(QSlider):
         event.ignore()
 
 
+class ROIVideoLabel(QLabel):
+    """ROI 그리기를 지원하는 비디오 레이블"""
+    roi_changed = pyqtSignal(int, int, int, int)  # (x1, y1, x2, y2)
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.roi_mode = False
+        self.drawing = False
+        self.roi_start = None
+        self.roi_end = None
+        self.roi_rect = None  # (x1, y1, x2, y2)
+        self.original_pixmap = None
+        self.actual_frame_size = None  # 실제 프레임 크기 (h, w) - 원본 영상 해상도
+        self.setMouseTracking(True)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    
+    def set_actual_frame_size(self, height: int, width: int):
+        """실제 프레임 크기 설정 (원본 영상 해상도)"""
+        self.actual_frame_size = (height, width)
+    
+    def set_roi_mode(self, enabled: bool):
+        """ROI 그리기 모드 활성화/비활성화"""
+        self.roi_mode = enabled
+        if not enabled:
+            self.roi_rect = None
+            self.roi_start = None
+            self.roi_end = None
+            if self.original_pixmap:
+                self.setPixmap(self.original_pixmap)
+        self.update()
+    
+    def clear_roi(self):
+        """ROI 영역 초기화"""
+        self.roi_rect = None
+        self.roi_start = None
+        self.roi_end = None
+        if self.original_pixmap:
+            self.setPixmap(self.original_pixmap)
+        self.update()
+    
+    def get_roi(self) -> Optional[Tuple[int, int, int, int]]:
+        """현재 ROI 영역 반환 (x1, y1, x2, y2)"""
+        return self.roi_rect
+    
+    def setPixmap(self, pixmap: QPixmap):
+        """픽스맵 설정 (원본 저장)"""
+        self.original_pixmap = pixmap
+        if self.roi_mode and self.roi_rect:
+            # ROI가 있으면 그려서 표시
+            self._draw_roi_on_pixmap(pixmap.copy())
+        else:
+            super().setPixmap(pixmap)
+    
+    def _draw_roi_on_pixmap(self, pixmap: QPixmap):
+        """픽스맵에 ROI 사각형 그리기"""
+        if not self.roi_rect:
+            super().setPixmap(pixmap)
+            return
+        
+        from PyQt6.QtGui import QPainter, QPen, QColor
+        
+        painter = QPainter(pixmap)
+        pen = QPen(QColor(0, 255, 0), 2)  # 초록색, 두께 2
+        painter.setPen(pen)
+        
+        x1, y1, x2, y2 = self.roi_rect
+        # QLabel의 실제 이미지 영역 계산
+        label_size = self.size()
+        pixmap_size = pixmap.size()
+        
+        # 중앙 정렬된 픽스맵의 실제 위치 계산
+        if pixmap_size.width() > 0 and pixmap_size.height() > 0:
+            scale_x = pixmap_size.width() / label_size.width() if label_size.width() > 0 else 1
+            scale_y = pixmap_size.height() / label_size.height() if label_size.height() > 0 else 1
+            
+            # 마우스 좌표를 픽스맵 좌표로 변환
+            px1 = int(x1 * scale_x)
+            py1 = int(y1 * scale_y)
+            px2 = int(x2 * scale_x)
+            py2 = int(y2 * scale_y)
+            
+            painter.drawRect(px1, py1, px2 - px1, py2 - py1)
+        
+        painter.end()
+        super().setPixmap(pixmap)
+    
+    def mousePressEvent(self, event):
+        """마우스 클릭 이벤트"""
+        if not self.roi_mode or event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        
+        self.drawing = True
+        pos = event.position().toPoint()
+        self.roi_start = (pos.x(), pos.y())
+        self.roi_end = self.roi_start
+    
+    def mouseMoveEvent(self, event):
+        """마우스 이동 이벤트"""
+        if not self.roi_mode:
+            super().mouseMoveEvent(event)
+            return
+        
+        pos = event.position().toPoint()
+        
+        if self.drawing:
+            self.roi_end = (pos.x(), pos.y())
+            # 실시간으로 ROI 그리기
+            if self.original_pixmap:
+                temp_pixmap = self.original_pixmap.copy()
+                self._draw_temp_roi(temp_pixmap)
+        else:
+            super().mouseMoveEvent(event)
+    
+    def mouseReleaseEvent(self, event):
+        """마우스 릴리즈 이벤트"""
+        if not self.roi_mode or event.button() != Qt.MouseButton.LeftButton:
+            super().mouseReleaseEvent(event)
+            return
+        
+        if self.drawing:
+            self.drawing = False
+            pos = event.position().toPoint()
+            self.roi_end = (pos.x(), pos.y())
+            
+            # ROI 영역 계산
+            x1 = min(self.roi_start[0], self.roi_end[0])
+            y1 = min(self.roi_start[1], self.roi_end[1])
+            x2 = max(self.roi_start[0], self.roi_end[0])
+            y2 = max(self.roi_start[1], self.roi_end[1])
+            
+            # 최소 크기 체크 (10x10 픽셀 이상)
+            if abs(x2 - x1) > 10 and abs(y2 - y1) > 10:
+                self.roi_rect = (x1, y1, x2, y2)
+                # 원본 프레임 좌표로 변환하여 전송
+                self._emit_roi_in_frame_coords()
+                # ROI 그려진 픽스맵 표시
+                if self.original_pixmap:
+                    self._draw_roi_on_pixmap(self.original_pixmap.copy())
+            else:
+                self.roi_rect = None
+                if self.original_pixmap:
+                    self.setPixmap(self.original_pixmap)
+    
+    def _draw_temp_roi(self, pixmap: QPixmap):
+        """임시 ROI 사각형 그리기 (드래그 중)"""
+        if not self.roi_start or not self.roi_end:
+            super().setPixmap(pixmap)
+            return
+        
+        from PyQt6.QtGui import QPainter, QPen, QColor
+        
+        painter = QPainter(pixmap)
+        pen = QPen(QColor(0, 255, 0), 2)  # 초록색, 두께 2
+        painter.setPen(pen)
+        
+        label_size = self.size()
+        pixmap_size = pixmap.size()
+        
+        if pixmap_size.width() > 0 and pixmap_size.height() > 0:
+            scale_x = pixmap_size.width() / label_size.width() if label_size.width() > 0 else 1
+            scale_y = pixmap_size.height() / label_size.height() if label_size.height() > 0 else 1
+            
+            px1 = int(self.roi_start[0] * scale_x)
+            py1 = int(self.roi_start[1] * scale_y)
+            px2 = int(self.roi_end[0] * scale_x)
+            py2 = int(self.roi_end[1] * scale_y)
+            
+            painter.drawRect(px1, py1, px2 - px1, py2 - py1)
+        
+        painter.end()
+        super().setPixmap(pixmap)
+    
+    def _emit_roi_in_frame_coords(self):
+        """ROI를 원본 프레임 좌표로 변환하여 시그널 전송"""
+        if not self.roi_rect or not self.original_pixmap:
+            return
+        
+        if not self.actual_frame_size:
+            # 실제 프레임 크기가 설정되지 않았으면 픽스맵 크기 사용 (하위 호환성)
+            pixmap_size = self.original_pixmap.size()
+            actual_h, actual_w = pixmap_size.height(), pixmap_size.width()
+        else:
+            # 실제 프레임 크기 사용 (원본 영상 해상도)
+            actual_h, actual_w = self.actual_frame_size
+        
+        label_size = self.size()
+        pixmap_size = self.original_pixmap.size()
+        
+        if pixmap_size.width() == 0 or pixmap_size.height() == 0:
+            return
+        
+        # QLabel에 표시된 픽스맵의 실제 크기 계산 (중앙 정렬 고려)
+        label_w = label_size.width()
+        label_h = label_size.height()
+        pixmap_w = pixmap_size.width()  # 스케일링된 픽스맵 크기
+        pixmap_h = pixmap_size.height()  # 스케일링된 픽스맵 크기
+        
+        # 중앙 정렬 오프셋 계산
+        if pixmap_w / pixmap_h > label_w / label_h:
+            # 픽스맵이 더 넓음 (상하 여백)
+            scale = label_h / pixmap_h
+            offset_x = (label_w - pixmap_w * scale) / 2
+            offset_y = 0
+        else:
+            # 픽스맵이 더 높음 (좌우 여백)
+            scale = label_w / pixmap_w
+            offset_x = 0
+            offset_y = (label_h - pixmap_h * scale) / 2
+        
+        # ROI 좌표를 스케일링된 픽스맵 좌표로 변환
+        x1, y1, x2, y2 = self.roi_rect
+        pixmap_x1 = max(0, int((x1 - offset_x) / scale))
+        pixmap_y1 = max(0, int((y1 - offset_y) / scale))
+        pixmap_x2 = min(pixmap_w, int((x2 - offset_x) / scale))
+        pixmap_y2 = min(pixmap_h, int((y2 - offset_y) / scale))
+        
+        # 스케일링된 픽스맵 좌표를 실제 프레임 좌표로 변환
+        # 픽스맵 크기와 실제 프레임 크기의 비율 계산
+        scale_to_actual_w = actual_w / pixmap_w if pixmap_w > 0 else 1
+        scale_to_actual_h = actual_h / pixmap_h if pixmap_h > 0 else 1
+        
+        frame_x1 = max(0, int(pixmap_x1 * scale_to_actual_w))
+        frame_y1 = max(0, int(pixmap_y1 * scale_to_actual_h))
+        frame_x2 = min(actual_w, int(pixmap_x2 * scale_to_actual_w))
+        frame_y2 = min(actual_h, int(pixmap_y2 * scale_to_actual_h))
+        
+        self.roi_changed.emit(frame_x1, frame_y1, frame_x2, frame_y2)
+
+
 # ============================================================================
 # 전처리 함수들 (img.py에서 가져옴)
 # ============================================================================
@@ -410,6 +640,7 @@ class AnalysisWorker(QThread):
         self.dbr_reader = dbr_reader
         self.conf_threshold = conf_threshold
         self.preprocessing_options = {}
+        self.roi_rect = None  # (x1, y1, x2, y2)
         self.running = True
 
     def update_options(self, options):
@@ -419,6 +650,10 @@ class AnalysisWorker(QThread):
     def update_conf_threshold(self, threshold):
         """YOLO 신뢰도 임계값 업데이트"""
         self.conf_threshold = threshold
+    
+    def set_roi(self, roi_rect: Optional[Tuple[int, int, int, int]]):
+        """ROI 영역 설정"""
+        self.roi_rect = roi_rect
 
     def stop(self):
         """분석 스레드 정지"""
@@ -435,18 +670,57 @@ class AnalysisWorker(QThread):
 
             # --- [무거운 분석 작업 수행] ---
             try:
+                # 0. ROI 적용 (ROI가 설정되어 있으면 프레임 크롭)
+                roi_offset_x = 0
+                roi_offset_y = 0
+                roi_scale_factor = 1.0  # 리사이징 스케일 팩터
+                if self.roi_rect:
+                    x1, y1, x2, y2 = self.roi_rect
+                    h, w = frame.shape[:2]
+                    # 경계 체크
+                    x1 = max(0, min(x1, w))
+                    y1 = max(0, min(y1, h))
+                    x2 = max(x1 + 1, min(x2, w))
+                    y2 = max(y1 + 1, min(y2, h))
+                    roi_offset_x = x1
+                    roi_offset_y = y1
+                    original_frame_size = frame.shape[:2]
+                    frame = frame[y1:y2, x1:x2]
+                    if frame.size == 0:
+                        continue  # 유효하지 않은 ROI
+                    
+                    # 크롭된 프레임이 너무 작으면 최소 크기로 리사이징 (YOLO 성능 향상)
+                    h_crop, w_crop = frame.shape[:2]
+                    min_size = 640  # YOLO 최적 크기
+                    scale_factor = 1.0
+                    
+                    if h_crop < min_size or w_crop < min_size:
+                        # 비율 유지하면서 최소 크기로 리사이징
+                        if h_crop < w_crop:
+                            scale_factor = min_size / h_crop
+                        else:
+                            scale_factor = min_size / w_crop
+                        
+                        new_h = int(h_crop * scale_factor)
+                        new_w = int(w_crop * scale_factor)
+                        frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+                        # 리사이징 후 좌표 변환을 위해 스케일 저장
+                        roi_scale_factor = scale_factor
+                    else:
+                        roi_scale_factor = 1.0
+                    
                 # 1. 전처리
                 processed_frame = self._apply_preprocessing(frame)
 
                 # 2. YOLO 탐지 (듀얼 패스: 원본 + 전처리)
-                detections_orig = self._detect_qr_codes(frame)  # 원본 프레임으로 탐지
-                detections_prep = self._detect_qr_codes(processed_frame)  # 전처리 프레임으로 탐지
+                detections_orig = self._detect_qr_codes(frame)  # 크롭된 원본 프레임으로 탐지
+                detections_prep = self._detect_qr_codes(processed_frame)  # 크롭된 전처리 프레임으로 탐지
                 
                 # 3. 결과 합치기 및 중복 제거
                 all_detections = detections_orig + detections_prep
                 detections = self._merge_detections(all_detections)
 
-                # 4. Dynamsoft 해독 (원본과 전처리 모두에서 시도)
+                # 4. Dynamsoft 해독 (크롭된 프레임 좌표로 해독)
                 for det in detections:
                     # 원본 프레임에서 먼저 시도
                     if not det.get('success', False):
@@ -454,6 +728,38 @@ class AnalysisWorker(QThread):
                     # 실패하면 전처리 프레임에서 시도
                     if not det.get('success', False):
                         self._decode_qr_code(processed_frame, det)
+                
+                # ROI가 있으면 탐지 결과 좌표를 원본 프레임 좌표로 변환 (해독 후 변환)
+                if self.roi_rect:
+                    for det in detections:
+                        # bbox 좌표 변환 (리사이징 고려)
+                        if 'bbox' in det:
+                            x1, y1, x2, y2 = det['bbox']
+                            # 리사이징된 경우 원래 크기로 변환
+                            if roi_scale_factor != 1.0:
+                                x1 = int(x1 / roi_scale_factor)
+                                y1 = int(y1 / roi_scale_factor)
+                                x2 = int(x2 / roi_scale_factor)
+                                y2 = int(y2 / roi_scale_factor)
+                            # 원본 프레임 좌표로 변환
+                            det['bbox'] = [x1 + roi_offset_x, y1 + roi_offset_y, 
+                                          x2 + roi_offset_x, y2 + roi_offset_y]
+                        # center 좌표 변환
+                        if 'center' in det:
+                            cx, cy = det['center']
+                            if roi_scale_factor != 1.0:
+                                cx = int(cx / roi_scale_factor)
+                                cy = int(cy / roi_scale_factor)
+                            det['center'] = (cx + roi_offset_x, cy + roi_offset_y)
+                        # quad 좌표 변환
+                        if 'quad' in det and det['quad']:
+                            quad = []
+                            for px, py in det['quad']:
+                                if roi_scale_factor != 1.0:
+                                    px = int(px / roi_scale_factor)
+                                    py = int(py / roi_scale_factor)
+                                quad.append([px + roi_offset_x, py + roi_offset_y])
+                            det['quad'] = quad
 
                 # 4. 분석 지표 계산
                 metrics = self._calculate_metrics(processed_frame, detections)
@@ -508,11 +814,18 @@ class AnalysisWorker(QThread):
         """YOLO로 QR 코드 탐지"""
         detections = []
         try:
+            # 프레임 크기 확인 (너무 작으면 탐지하지 않음)
+            h, w = frame.shape[:2]
+            if h < 32 or w < 32:
+                # 너무 작은 프레임은 탐지하지 않음
+                return detections
+            
+            # YOLO 탐지 수행
             results = self.yolo_model(frame, conf=self.conf_threshold, verbose=False)
             result = results[0]
             
+            # 디버깅: YOLO 결과 확인
             if result.boxes is not None and len(result.boxes) > 0:
-                h, w = frame.shape[:2]
                 for box in result.boxes:
                     conf = float(box.conf[0])
                     xyxy = box.xyxy[0].cpu().numpy()
@@ -535,7 +848,7 @@ class AnalysisWorker(QThread):
                         'area': (x2 - x1) * (y2 - y1)
                     })
         except Exception as e:
-            print(f"[AnalysisWorker] YOLO 탐지 오류: {e}")
+            pass
             
         return detections
     
@@ -582,6 +895,14 @@ class AnalysisWorker(QThread):
             
         try:
             x1, y1, x2, y2 = detection['bbox']
+            
+            # 프레임 크기 확인 및 경계 체크
+            h, w = frame.shape[:2]
+            x1 = max(0, min(x1, w - 1))
+            y1 = max(0, min(y1, h - 1))
+            x2 = max(x1 + 1, min(x2, w))
+            y2 = max(y1 + 1, min(y2, h))
+            
             roi = frame[y1:y2, x1:x2]
             
             if roi.size == 0:
@@ -923,6 +1244,7 @@ class VideoManager(QObject):
         
         self.yolo_model = yolo_model
         self.dbr_reader = dbr_reader
+        self.roi_rect = None  # (x1, y1, x2, y2)
         
         self.play_thread = None
         self.analysis_thread = None
@@ -935,6 +1257,9 @@ class VideoManager(QObject):
         self.analysis_thread = AnalysisWorker(self.queue, self.yolo_model, self.dbr_reader, conf_threshold)
         if preprocessing_options:
             self.analysis_thread.update_options(preprocessing_options)
+        # ROI 설정 (self.roi_rect가 설정되어 있으면 전달)
+        if self.roi_rect:
+            self.analysis_thread.set_roi(self.roi_rect)
         self.analysis_thread.start()
 
         # 2. 재생 스레드 생성
@@ -982,6 +1307,12 @@ class VideoManager(QObject):
         if self.analysis_thread:
             self.analysis_thread.stop()
             self.analysis_thread.wait()
+    
+    def set_roi(self, roi_rect: Optional[Tuple[int, int, int, int]]):
+        """ROI 영역 설정"""
+        self.roi_rect = roi_rect
+        if self.analysis_thread:
+            self.analysis_thread.set_roi(roi_rect)
     
     def wait(self):
         """스레드 종료 대기 (QThread.wait()와 호환성을 위한 메서드)"""
@@ -1048,11 +1379,16 @@ class VideoProcessorWorker(QThread):
         self.conf_threshold = 0.25
         self.display_mode = 'all'  # 'all', 'success', 'fail'
         self.preprocessing_options = {}
+        self.roi_rect = None  # (x1, y1, x2, y2)
         self.cap = None
         self.total_frames = 0
         self.current_frame_idx = 0
         self.seek_to_frame = -1  # 시크할 프레임 번호 (-1이면 시크 안함)
         self.frame_interval = 1  # 프레임 간격 (1=모든 프레임 처리)
+    
+    def set_roi(self, roi_rect: Optional[Tuple[int, int, int, int]]):
+        """ROI 영역 설정"""
+        self.roi_rect = roi_rect
         
     def set_video(self, video_path: str):
         """비디오 파일 경로 설정"""
@@ -1168,15 +1504,96 @@ class VideoProcessorWorker(QThread):
                 # 원본 프레임 저장
                 original_frame = frame.copy()
                 
+                # ROI 적용 (ROI가 설정되어 있으면 프레임 크롭)
+                roi_offset_x = 0
+                roi_offset_y = 0
+                roi_scale_factor = 1.0  # 리사이징 스케일 팩터
+                if self.roi_rect:
+                    x1, y1, x2, y2 = self.roi_rect
+                    h, w = frame.shape[:2]
+                    # 경계 체크
+                    x1 = max(0, min(x1, w))
+                    y1 = max(0, min(y1, h))
+                    x2 = max(x1 + 1, min(x2, w))
+                    y2 = max(y1 + 1, min(y2, h))
+                    roi_offset_x = x1
+                    roi_offset_y = y1
+                    original_frame_size = frame.shape[:2]
+                    frame = frame[y1:y2, x1:x2]
+                    if frame.size == 0:
+                        continue  # 유효하지 않은 ROI
+                    
+                    # 크롭된 프레임이 너무 작으면 최소 크기로 리사이징 (YOLO 성능 향상)
+                    h_crop, w_crop = frame.shape[:2]
+                    min_size = 640  # YOLO 최적 크기
+                    scale_factor = 1.0
+                    
+                    if h_crop < min_size or w_crop < min_size:
+                        # 비율 유지하면서 최소 크기로 리사이징
+                        if h_crop < w_crop:
+                            scale_factor = min_size / h_crop
+                        else:
+                            scale_factor = min_size / w_crop
+                        
+                        new_h = int(h_crop * scale_factor)
+                        new_w = int(w_crop * scale_factor)
+                        frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+                        # 리사이징 후 좌표 변환을 위해 스케일 저장
+                        roi_scale_factor = scale_factor
+                    else:
+                        roi_scale_factor = 1.0
+                    
                 # 전처리 적용
                 preprocessed_frame = self._apply_preprocessing(frame.copy())
                 
-                # YOLO 탐지 (전처리된 프레임 사용)
-                detections = self._detect_qr_codes(preprocessed_frame)
+                # YOLO 탐지 (듀얼 패스: 원본 + 전처리 - AnalysisWorker와 동일하게)
+                detections_orig = self._detect_qr_codes(frame)  # 크롭된 원본 프레임으로 탐지
+                detections_prep = self._detect_qr_codes(preprocessed_frame)  # 크롭된 전처리 프레임으로 탐지
                 
-                # Dynamsoft 해독
+                # 결과 합치기 및 중복 제거
+                all_detections = detections_orig + detections_prep
+                detections = self._merge_detections(all_detections)
+                
+                # Dynamsoft 해독 (크롭된 프레임 좌표로 해독)
                 for det in detections:
-                    self._decode_qr_code(preprocessed_frame, det)
+                    # 원본 프레임에서 먼저 시도
+                    if not det.get('success', False):
+                        self._decode_qr_code(frame, det)
+                    # 실패하면 전처리 프레임에서 시도
+                    if not det.get('success', False):
+                        self._decode_qr_code(preprocessed_frame, det)
+                
+                # ROI가 있으면 탐지 결과 좌표를 원본 프레임 좌표로 변환 (해독 후 변환)
+                if self.roi_rect:
+                    for det in detections:
+                        # bbox 좌표 변환 (리사이징 고려)
+                        if 'bbox' in det:
+                            x1, y1, x2, y2 = det['bbox']
+                            # 리사이징된 경우 원래 크기로 변환
+                            if roi_scale_factor != 1.0:
+                                x1 = int(x1 / roi_scale_factor)
+                                y1 = int(y1 / roi_scale_factor)
+                                x2 = int(x2 / roi_scale_factor)
+                                y2 = int(y2 / roi_scale_factor)
+                            # 원본 프레임 좌표로 변환
+                            det['bbox'] = [x1 + roi_offset_x, y1 + roi_offset_y, 
+                                          x2 + roi_offset_x, y2 + roi_offset_y]
+                        # center 좌표 변환
+                        if 'center' in det:
+                            cx, cy = det['center']
+                            if roi_scale_factor != 1.0:
+                                cx = int(cx / roi_scale_factor)
+                                cy = int(cy / roi_scale_factor)
+                            det['center'] = (cx + roi_offset_x, cy + roi_offset_y)
+                        # quad 좌표 변환
+                        if 'quad' in det and det['quad']:
+                            quad = []
+                            for px, py in det['quad']:
+                                if roi_scale_factor != 1.0:
+                                    px = int(px / roi_scale_factor)
+                                    py = int(py / roi_scale_factor)
+                                quad.append([px + roi_offset_x, py + roi_offset_y])
+                            det['quad'] = quad
                 
                 # 분석 지표 계산
                 metrics = self._calculate_metrics(preprocessed_frame, detections)
@@ -1186,8 +1603,10 @@ class VideoProcessorWorker(QThread):
                 metrics['has_success'] = any(d.get('success', False) for d in detections)
                 
                 # 시각화된 프레임 생성 (원본과 전처리 모두)
+                # 원본 프레임에 전처리 적용 (시각화용)
+                original_preprocessed = self._apply_preprocessing(original_frame.copy())
                 vis_original = self._visualize_frame(original_frame.copy(), detections)
-                vis_preprocessed = self._visualize_frame(preprocessed_frame.copy(), detections)
+                vis_preprocessed = self._visualize_frame(original_preprocessed, detections)
                 
                 # Signal 발송
                 self.frame_processed.emit(vis_original, vis_preprocessed, detections, metrics)
@@ -1243,11 +1662,18 @@ class VideoProcessorWorker(QThread):
         """YOLO로 QR 코드 탐지"""
         detections = []
         try:
+            # 프레임 크기 확인 (너무 작으면 경고)
+            h, w = frame.shape[:2]
+            if h < 32 or w < 32:
+                # 너무 작은 프레임은 탐지하지 않음
+                return detections
+            
+            # YOLO 탐지 수행
             results = self.yolo_model(frame, conf=self.conf_threshold, verbose=False)
             result = results[0]
             
+            # 디버깅: YOLO 결과 확인
             if result.boxes is not None and len(result.boxes) > 0:
-                h, w = frame.shape[:2]
                 for box in result.boxes:
                     conf = float(box.conf[0])
                     xyxy = box.xyxy[0].cpu().numpy()
@@ -1270,9 +1696,45 @@ class VideoProcessorWorker(QThread):
                         'area': (x2 - x1) * (y2 - y1)
                     })
         except Exception as e:
-            print(f"YOLO 탐지 오류: {e}")
+            pass
             
         return detections
+    
+    def _merge_detections(self, detections: List[Dict]) -> List[Dict]:
+        """중복 탐지 결과 병합 (NMS 유사 로직)"""
+        if not detections:
+            return []
+        
+        # 신뢰도가 높은 순으로 정렬
+        sorted_detections = sorted(detections, key=lambda x: x.get('confidence', 0), reverse=True)
+        merged = []
+        
+        for det in sorted_detections:
+            is_duplicate = False
+            bx1, by1, bx2, by2 = det['bbox']
+            b_center = det.get('center', [(bx1 + bx2) // 2, (by1 + by2) // 2])
+            b_area = det.get('area', (bx2 - bx1) * (by2 - by1))
+            
+            # 이미 추가된 박스와 비교
+            for existing in merged:
+                ex1, ey1, ex2, ey2 = existing['bbox']
+                e_center = existing.get('center', [(ex1 + ex2) // 2, (ey1 + ey2) // 2])
+                e_area = existing.get('area', (ex2 - ex1) * (ey2 - ey1))
+                
+                # 중심점 거리 계산
+                center_dist = np.sqrt((b_center[0] - e_center[0])**2 + (b_center[1] - e_center[1])**2)
+                
+                # 중심점이 가까우면 (박스 크기의 30% 이내) 중복으로 간주
+                threshold = min(b_area, e_area) ** 0.5 * 0.3
+                
+                if center_dist < threshold:
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                merged.append(det)
+        
+        return merged
     
     def _decode_qr_code(self, frame: np.ndarray, detection: Dict):
         """Dynamsoft로 QR 코드 해독"""
@@ -1281,6 +1743,14 @@ class VideoProcessorWorker(QThread):
             
         try:
             x1, y1, x2, y2 = detection['bbox']
+            
+            # 프레임 크기 확인 및 경계 체크
+            h, w = frame.shape[:2]
+            x1 = max(0, min(x1, w - 1))
+            y1 = max(0, min(y1, h - 1))
+            x2 = max(x1 + 1, min(x2, w))
+            y2 = max(y1 + 1, min(y2, h))
+            
             roi = frame[y1:y2, x1:x2]
             
             if roi.size == 0:
@@ -1425,6 +1895,11 @@ class WebcamAIWorker(QThread):
         self.conf_threshold = conf_threshold
         self.yolo_model = yolo_model
         self.dbr_reader = dbr_reader
+        self.roi_rect = None  # (x1, y1, x2, y2)
+    
+    def set_roi(self, roi_rect: Optional[Tuple[int, int, int, int]]):
+        """ROI 영역 설정"""
+        self.roi_rect = roi_rect
 
     def run(self):
         while self.running:
@@ -1435,6 +1910,23 @@ class WebcamAIWorker(QThread):
 
             results = []
             
+            # ROI 적용 (ROI가 설정되어 있으면 프레임 크롭)
+            roi_offset_x = 0
+            roi_offset_y = 0
+            if self.roi_rect:
+                x1, y1, x2, y2 = self.roi_rect
+                h, w = frame.shape[:2]
+                # 경계 체크
+                x1 = max(0, min(x1, w))
+                y1 = max(0, min(y1, h))
+                x2 = max(x1 + 1, min(x2, w))
+                y2 = max(y1 + 1, min(y2, h))
+                roi_offset_x = x1
+                roi_offset_y = y1
+                frame = frame[y1:y2, x1:x2]
+                if frame.size == 0:
+                    continue  # 유효하지 않은 ROI
+
             # YOLO 탐지
             detections = []
             if self.yolo_model is not None:
@@ -1461,6 +1953,14 @@ class WebcamAIWorker(QThread):
                             })
                 except Exception as e:
                     pass
+            
+            # ROI가 있으면 탐지 결과 좌표를 원본 프레임 좌표로 변환
+            if self.roi_rect:
+                for det in detections:
+                    if 'bbox' in det:
+                        x1, y1, x2, y2 = det['bbox']
+                        det['bbox'] = [x1 + roi_offset_x, y1 + roi_offset_y, 
+                                      x2 + roi_offset_x, y2 + roi_offset_y]
             
             # Dynamsoft 해독
             if self.dbr_reader is not None and len(detections) > 0:
@@ -2479,6 +2979,10 @@ class QRAnalysisMainWindow(QMainWindow):
         self.log_filter_mode = 'all'  # 'all', 'success', 'fail'
         self.all_log_entries = []  # 모든 로그 항목 저장 (필터링용)
         
+        # ROI 관련 변수
+        self.roi_mode = False
+        self.roi_rect = None  # (x1, y1, x2, y2) 원본 프레임 좌표
+        
         # UI 초기화
         self.init_ui()
         self.apply_dark_theme()
@@ -2643,6 +3147,13 @@ class QRAnalysisMainWindow(QMainWindow):
         # 대시보드 (수평 배치)
         self._create_inline_dashboard(video_control_layout)
         
+        # ROI 모드 토글 버튼
+        self.btn_roi_mode = QPushButton("🎯 ROI 모드")
+        self.btn_roi_mode.setMinimumHeight(40)
+        self.btn_roi_mode.setCheckable(True)
+        self.btn_roi_mode.setToolTip("ROI 모드를 활성화하면 마우스로 관심 영역을 그릴 수 있습니다")
+        self.btn_roi_mode.clicked.connect(self.toggle_roi_mode)
+        
         # 히트맵/그래프 토글 버튼
         self.btn_heatmap = QPushButton("🗺️ 히트맵")
         self.btn_heatmap.setMinimumHeight(40)
@@ -2654,6 +3165,7 @@ class QRAnalysisMainWindow(QMainWindow):
         self.btn_graphs.setCheckable(True)
         self.btn_graphs.clicked.connect(self.toggle_graphs)
         
+        video_control_layout.addWidget(self.btn_roi_mode)
         video_control_layout.addWidget(self.btn_heatmap)
         video_control_layout.addWidget(self.btn_graphs)
         video_control_layout.addStretch()
@@ -2681,14 +3193,15 @@ class QRAnalysisMainWindow(QMainWindow):
         # 영상 플레이어 (원본 + 전처리)
         video_layout = QHBoxLayout()
         
-        # 원본 영상
+        # 원본 영상 (ROI 그리기 지원)
         original_video_group = QGroupBox("📹 원본 영상")
         original_video_layout = QVBoxLayout(original_video_group)
-        self.original_video_label = QLabel()
+        self.original_video_label = ROIVideoLabel()
         self.original_video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.original_video_label.setMinimumSize(500, 375)  # 크기 증가
         self.original_video_label.setStyleSheet("QLabel { background-color: #1e1e1e; }")
         self.original_video_label.setText("원본 영상")
+        self.original_video_label.roi_changed.connect(self.on_roi_changed)
         original_video_layout.addWidget(self.original_video_label)
         video_layout.addWidget(original_video_group)
         
@@ -3347,6 +3860,65 @@ class QRAnalysisMainWindow(QMainWindow):
         if self.worker:
             self.worker.set_preprocessing_options(self.preprocessing_options)
     
+    def toggle_roi_mode(self):
+        """ROI 모드 토글"""
+        self.roi_mode = self.btn_roi_mode.isChecked()
+        self.original_video_label.set_roi_mode(self.roi_mode)
+        
+        if not self.roi_mode:
+            # ROI 모드 비활성화 시 ROI 초기화
+            self.roi_rect = None
+            self.original_video_label.clear_roi()
+            # 워커들에게 ROI 초기화 알림
+            self._update_roi_to_workers()
+        else:
+            # ROI 모드 활성화 시 안내 메시지
+            QMessageBox.information(
+                self,
+                "ROI 모드 활성화",
+                "원본 영상 화면에서 마우스로 드래그하여 관심 영역(ROI)을 그려주세요.\n"
+                "ROI가 설정되면 해당 영역만 집중적으로 탐지/해독합니다."
+            )
+    
+    def on_roi_changed(self, x1: int, y1: int, x2: int, y2: int):
+        """ROI 영역 변경 시 호출"""
+        # 처리 중이면 ROI 변경 불가
+        if hasattr(self, 'worker') and self.worker:
+            is_running = getattr(self.worker, 'is_running', False) or (hasattr(self.worker, 'isRunning') and self.worker.isRunning())
+            if is_running:
+                QMessageBox.warning(
+                    self,
+                    "ROI 변경 불가",
+                    "영상 처리가 진행 중입니다.\nROI를 변경하려면 먼저 정지하세요."
+                )
+                # ROI를 이전 값으로 복원 (그림은 유지)
+                # clear_roi()를 호출하지 않고, 이전 ROI를 다시 설정
+                if hasattr(self, 'roi_rect') and self.roi_rect:
+                    # 이전 ROI 좌표를 다시 설정 (그림 복원)
+                    prev_x1, prev_y1, prev_x2, prev_y2 = self.roi_rect
+                    if hasattr(self, 'original_video_label') and self.original_video_label.original_pixmap:
+                        # 이전 ROI를 다시 그리기
+                        temp_pixmap = self.original_video_label.original_pixmap.copy()
+                        self.original_video_label._draw_roi_on_pixmap(temp_pixmap)
+                return
+        
+        self.roi_rect = (x1, y1, x2, y2)
+        # 워커들에게 ROI 업데이트 알림
+        self._update_roi_to_workers()
+    
+    def _update_roi_to_workers(self):
+        """모든 워커에게 ROI 업데이트"""
+        # 동기/비동기 모드 모두 self.worker를 통해 접근
+        if hasattr(self, 'worker') and self.worker:
+            if hasattr(self.worker, 'set_roi'):
+                self.worker.set_roi(self.roi_rect)
+        
+        # 웹캠 모드
+        if hasattr(self, 'webcam_window') and self.webcam_window:
+            if hasattr(self.webcam_window, 'ai_worker') and self.webcam_window.ai_worker:
+                if hasattr(self.webcam_window.ai_worker, 'set_roi'):
+                    self.webcam_window.ai_worker.set_roi(self.roi_rect)
+    
     def toggle_heatmap(self):
         """히트맵 섹션 토글"""
         if self.heatmap_group.isVisible():
@@ -3395,6 +3967,10 @@ class QRAnalysisMainWindow(QMainWindow):
             self.worker.finished.connect(self.on_processing_finished)
             self.worker.error_occurred.connect(self.on_error)
             
+            # ROI 설정 (비동기 모드)
+            if self.roi_rect:
+                self.worker.set_roi(self.roi_rect)
+            
             # 비동기 처리 시작
             self.worker.start(
                 video_path=self.video_path,
@@ -3408,6 +3984,11 @@ class QRAnalysisMainWindow(QMainWindow):
             self.worker.set_model(self.yolo_model, self.dbr_reader)
             self.worker.set_preprocessing_options(self.preprocessing_options)
             self.worker.set_frame_interval(self.frame_interval_spin.value())
+            
+            # ROI 설정 (동기 모드)
+            if self.roi_rect:
+                self.worker.set_roi(self.roi_rect)
+            
             self.worker.frame_processed.connect(self._on_frame_processed)
             self.worker.timeline_updated.connect(self.on_timeline_updated)
             self.worker.finished.connect(self.on_processing_finished)
@@ -3808,12 +4389,12 @@ class QRAnalysisMainWindow(QMainWindow):
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_frame.shape
         bytes_per_line = ch * w
-        
+
         # QImage 생성 - 메모리 안전성을 위해 copy() 사용
         # rgb_frame.data는 포인터이므로 함수 종료 후 메모리가 해제될 수 있음
         rgb_frame_copy = rgb_frame.copy()
         q_image = QImage(rgb_frame_copy.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-        
+
         # 라벨 크기에 맞춰 스케일링
         pixmap = QPixmap.fromImage(q_image)
         scaled_pixmap = pixmap.scaled(
@@ -3821,8 +4402,12 @@ class QRAnalysisMainWindow(QMainWindow):
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation
         )
-        
+
         label.setPixmap(scaled_pixmap)
+        
+        # ROIVideoLabel인 경우 실제 프레임 크기 설정
+        if isinstance(label, ROIVideoLabel):
+            label.set_actual_frame_size(h, w)  # 실제 프레임 크기 (원본 해상도)
     
     def _update_graphs(self):
         """그래프 업데이트"""
