@@ -46,12 +46,12 @@ from PyQt6.QtWidgets import (
     QSplitter, QGroupBox, QGridLayout, QFrame, QHeaderView, QMessageBox,
     QScrollArea, QDialog, QCheckBox, QSlider, QLineEdit, QComboBox, QFormLayout,
     QDialogButtonBox, QStyleOptionSlider, QDoubleSpinBox, QSpinBox, QInputDialog,
-    QSizePolicy
+    QSizePolicy, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem
 )
 from PyQt6.QtCore import (
-    QThread, pyqtSignal, Qt, QTimer, QObject, QMutex, QMutexLocker
+    QThread, pyqtSignal, Qt, QTimer, QObject, QMutex, QMutexLocker, QPointF
 )
-from PyQt6.QtGui import QImage, QPixmap, QFont
+from PyQt6.QtGui import QImage, QPixmap, QFont, QWheelEvent, QMouseEvent
 
 import pyqtgraph as pg
 from pyqtgraph import PlotWidget, ScatterPlotItem
@@ -373,6 +373,8 @@ def apply_morphology(image: np.ndarray, operation: str = 'closing', kernel_size:
         result = cv2.morphologyEx(gray, cv2.MORPH_OPEN, kernel)
     elif operation == 'dilation':
         result = cv2.dilate(gray, kernel, iterations=1)
+    elif operation == 'erosion':
+        result = cv2.erode(gray, kernel, iterations=1)
     else:
         result = gray
     
@@ -3010,6 +3012,718 @@ class WebcamWindow(QMainWindow):
 
 
 # ============================================================================
+# 프레임 집중 분석 창
+# ============================================================================
+
+class ZoomableGraphicsView(QGraphicsView):
+    """줌/팬 기능이 있는 이미지 뷰어"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setBackgroundBrush(Qt.GlobalColor.black)
+        
+        self.scene = QGraphicsScene(self)
+        self.setScene(self.scene)
+        self.pixmap_item = None
+        
+        self.zoom_factor = 1.0
+        self.min_zoom = 0.1
+        self.max_zoom = 10.0
+    
+    def set_image(self, image: np.ndarray, preserve_zoom: bool = False):
+        """이미지 설정"""
+        # 현재 줌 상태 저장
+        current_zoom = self.zoom_factor if preserve_zoom else None
+        current_transform = self.transform() if preserve_zoom else None
+        
+        # OpenCV 이미지를 QPixmap으로 변환
+        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb_image.shape
+        bytes_per_line = ch * w
+        q_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+        pixmap = QPixmap.fromImage(q_image)
+        
+        # 기존 아이템 제거
+        if self.pixmap_item:
+            self.scene.removeItem(self.pixmap_item)
+        
+        # 새 아이템 추가
+        self.pixmap_item = QGraphicsPixmapItem(pixmap)
+        self.scene.addItem(self.pixmap_item)
+        self.scene.setSceneRect(self.pixmap_item.boundingRect())
+        
+        # 줌 상태 복원 또는 리셋
+        if preserve_zoom and current_zoom is not None and current_transform is not None:
+            # 줌 상태 복원
+            self.setTransform(current_transform)
+        else:
+            # 초기 줌 리셋
+            self.reset_zoom()
+    
+    def reset_zoom(self):
+        """줌 리셋"""
+        self.zoom_factor = 1.0
+        self.resetTransform()
+        self.fitInView(self.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
+    
+    def wheelEvent(self, event: QWheelEvent):
+        """마우스 휠로 줌 인/아웃"""
+        # 줌 인/아웃
+        zoom_in_factor = 1.15
+        zoom_out_factor = 1 / zoom_in_factor
+        
+        if event.angleDelta().y() > 0:
+            # 줌 인
+            if self.zoom_factor * zoom_in_factor <= self.max_zoom:
+                self.scale(zoom_in_factor, zoom_in_factor)
+                self.zoom_factor *= zoom_in_factor
+        else:
+            # 줌 아웃
+            if self.zoom_factor * zoom_out_factor >= self.min_zoom:
+                self.scale(zoom_out_factor, zoom_out_factor)
+                self.zoom_factor *= zoom_out_factor
+
+
+class FrameAnalysisWindow(QMainWindow):
+    """프레임 집중 분석 창"""
+    
+    def __init__(self, frame: np.ndarray, yolo_model, dbr_reader, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("🔍 프레임 집중 분석")
+        self.resize(1400, 900)
+        
+        self.original_frame = frame.copy()
+        self.current_frame = frame.copy()
+        self.yolo_model = yolo_model
+        self.dbr_reader = dbr_reader
+        self.qr_counter = 0  # QR 번호 카운터
+        
+        self.init_ui()
+        self.apply_dark_theme()
+        
+        # 초기 이미지 표시
+        self.image_viewer.set_image(self.current_frame)
+    
+    def init_ui(self):
+        """UI 초기화"""
+        # 스크롤 가능한 중앙 위젯
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        
+        central_widget = QWidget()
+        scroll_area.setWidget(central_widget)
+        self.setCentralWidget(scroll_area)
+        
+        main_layout = QVBoxLayout(central_widget)
+        
+        # 상단: 이미지 뷰어와 전처리 패널
+        top_layout = QHBoxLayout()
+        
+        # 왼쪽: 이미지 뷰어
+        viewer_group = QGroupBox("🖼️ 이미지 뷰어 (마우스 휠: 줌, 드래그: 이동)")
+        viewer_layout = QVBoxLayout(viewer_group)
+        
+        self.image_viewer = ZoomableGraphicsView()
+        self.image_viewer.setMinimumSize(800, 600)
+        viewer_layout.addWidget(self.image_viewer)
+        
+        # 줌 컨트롤 버튼
+        zoom_layout = QHBoxLayout()
+        btn_reset_zoom = QPushButton("🔍 줌 리셋")
+        btn_reset_zoom.clicked.connect(self.image_viewer.reset_zoom)
+        zoom_layout.addWidget(btn_reset_zoom)
+        zoom_layout.addStretch()
+        viewer_layout.addLayout(zoom_layout)
+        
+        top_layout.addWidget(viewer_group, 2)
+        
+        # 오른쪽: 전처리 패널
+        right_panel = QWidget()
+        right_panel.setMaximumWidth(400)
+        right_layout = QVBoxLayout(right_panel)
+        
+        # 전처리 옵션 그룹
+        preprocess_group = QGroupBox("⚙️ 전처리 옵션")
+        preprocess_layout = QVBoxLayout(preprocess_group)
+        preprocess_scroll = QScrollArea()
+        preprocess_scroll.setWidgetResizable(True)
+        preprocess_scroll.setMinimumHeight(600)
+        
+        preprocess_content = QWidget()
+        preprocess_content_layout = QVBoxLayout(preprocess_content)
+        
+        # CLAHE
+        clahe_group = QGroupBox("CLAHE (대비 향상)")
+        clahe_layout = QVBoxLayout(clahe_group)
+        self.clahe_check = QCheckBox("사용")
+        clahe_layout.addWidget(self.clahe_check)
+        
+        clahe_clip_layout = QHBoxLayout()
+        clahe_clip_layout.addWidget(QLabel("Clip Limit:"))
+        self.clahe_clip_spin = QDoubleSpinBox()
+        self.clahe_clip_spin.setRange(0.1, 10.0)
+        self.clahe_clip_spin.setValue(2.0)
+        self.clahe_clip_spin.setSingleStep(0.1)
+        clahe_clip_layout.addWidget(self.clahe_clip_spin)
+        clahe_layout.addLayout(clahe_clip_layout)
+        
+        clahe_tile_layout = QHBoxLayout()
+        clahe_tile_layout.addWidget(QLabel("Tile Size:"))
+        self.clahe_tile_spin = QSpinBox()
+        self.clahe_tile_spin.setRange(2, 32)
+        self.clahe_tile_spin.setValue(8)
+        clahe_tile_layout.addWidget(self.clahe_tile_spin)
+        clahe_layout.addLayout(clahe_tile_layout)
+        
+        preprocess_content_layout.addWidget(clahe_group)
+        
+        # 노이즈 제거
+        denoise_group = QGroupBox("노이즈 제거")
+        denoise_layout = QVBoxLayout(denoise_group)
+        self.denoise_check = QCheckBox("사용")
+        denoise_layout.addWidget(self.denoise_check)
+        
+        denoise_method_layout = QHBoxLayout()
+        denoise_method_layout.addWidget(QLabel("방법:"))
+        self.denoise_method = QComboBox()
+        self.denoise_method.addItems(['bilateral', 'gaussian', 'median'])
+        denoise_method_layout.addWidget(self.denoise_method)
+        denoise_layout.addLayout(denoise_method_layout)
+        
+        denoise_strength_layout = QHBoxLayout()
+        denoise_strength_layout.addWidget(QLabel("강도:"))
+        self.denoise_strength_spin = QSpinBox()
+        self.denoise_strength_spin.setRange(1, 50)
+        self.denoise_strength_spin.setValue(9)
+        denoise_strength_layout.addWidget(self.denoise_strength_spin)
+        denoise_layout.addLayout(denoise_strength_layout)
+        
+        # Bilateral 전용 옵션
+        bilateral_group = QGroupBox("Bilateral Filter 옵션")
+        bilateral_layout = QVBoxLayout(bilateral_group)
+        sigma_color_layout = QHBoxLayout()
+        sigma_color_layout.addWidget(QLabel("Sigma Color:"))
+        self.bilateral_sigma_color = QDoubleSpinBox()
+        self.bilateral_sigma_color.setRange(1.0, 200.0)
+        self.bilateral_sigma_color.setValue(75.0)
+        sigma_color_layout.addWidget(self.bilateral_sigma_color)
+        bilateral_layout.addLayout(sigma_color_layout)
+        
+        sigma_space_layout = QHBoxLayout()
+        sigma_space_layout.addWidget(QLabel("Sigma Space:"))
+        self.bilateral_sigma_space = QDoubleSpinBox()
+        self.bilateral_sigma_space.setRange(1.0, 200.0)
+        self.bilateral_sigma_space.setValue(75.0)
+        sigma_space_layout.addWidget(self.bilateral_sigma_space)
+        bilateral_layout.addLayout(sigma_space_layout)
+        denoise_layout.addWidget(bilateral_group)
+        
+        preprocess_content_layout.addWidget(denoise_group)
+        
+        # 이진화
+        threshold_group = QGroupBox("이진화 (Adaptive Threshold)")
+        threshold_layout = QVBoxLayout(threshold_group)
+        self.threshold_check = QCheckBox("사용")
+        threshold_layout.addWidget(self.threshold_check)
+        
+        threshold_block_layout = QHBoxLayout()
+        threshold_block_layout.addWidget(QLabel("Block Size (홀수):"))
+        self.threshold_block_spin = QSpinBox()
+        self.threshold_block_spin.setRange(3, 51)
+        self.threshold_block_spin.setValue(11)
+        self.threshold_block_spin.setSingleStep(2)
+        threshold_block_layout.addWidget(self.threshold_block_spin)
+        threshold_layout.addLayout(threshold_block_layout)
+        
+        threshold_c_layout = QHBoxLayout()
+        threshold_c_layout.addWidget(QLabel("C 값:"))
+        self.threshold_c_spin = QSpinBox()
+        self.threshold_c_spin.setRange(-50, 50)
+        self.threshold_c_spin.setValue(2)
+        threshold_c_layout.addWidget(self.threshold_c_spin)
+        threshold_layout.addLayout(threshold_c_layout)
+        
+        preprocess_content_layout.addWidget(threshold_group)
+        
+        # 형태학적 연산
+        morphology_group = QGroupBox("형태학적 연산")
+        morphology_layout = QVBoxLayout(morphology_group)
+        self.morphology_check = QCheckBox("사용")
+        morphology_layout.addWidget(self.morphology_check)
+        
+        morphology_op_layout = QHBoxLayout()
+        morphology_op_layout.addWidget(QLabel("연산:"))
+        self.morphology_operation = QComboBox()
+        self.morphology_operation.addItems(['closing', 'opening', 'dilation', 'erosion'])
+        morphology_op_layout.addWidget(self.morphology_operation)
+        morphology_layout.addLayout(morphology_op_layout)
+        
+        morphology_kernel_layout = QHBoxLayout()
+        morphology_kernel_layout.addWidget(QLabel("Kernel Size (홀수):"))
+        self.morphology_kernel_spin = QSpinBox()
+        self.morphology_kernel_spin.setRange(3, 31)
+        self.morphology_kernel_spin.setValue(5)
+        self.morphology_kernel_spin.setSingleStep(2)
+        morphology_kernel_layout.addWidget(self.morphology_kernel_spin)
+        morphology_layout.addLayout(morphology_kernel_layout)
+        
+        preprocess_content_layout.addWidget(morphology_group)
+        
+        # 가우시안 블러 (추가 옵션)
+        blur_group = QGroupBox("가우시안 블러")
+        blur_layout = QVBoxLayout(blur_group)
+        self.blur_check = QCheckBox("사용")
+        blur_layout.addWidget(self.blur_check)
+        
+        blur_kernel_layout = QHBoxLayout()
+        blur_kernel_layout.addWidget(QLabel("Kernel Size (홀수):"))
+        self.blur_kernel_spin = QSpinBox()
+        self.blur_kernel_spin.setRange(3, 51)
+        self.blur_kernel_spin.setValue(5)
+        self.blur_kernel_spin.setSingleStep(2)
+        blur_kernel_layout.addWidget(self.blur_kernel_spin)
+        blur_layout.addLayout(blur_kernel_layout)
+        
+        preprocess_content_layout.addWidget(blur_group)
+        
+        preprocess_content_layout.addStretch()
+        preprocess_scroll.setWidget(preprocess_content)
+        preprocess_layout.addWidget(preprocess_scroll)
+        
+        right_layout.addWidget(preprocess_group)
+        
+        # 분석 버튼
+        analyze_layout = QVBoxLayout()
+        btn_analyze = QPushButton("🔍 분석 시작")
+        btn_analyze.setMinimumHeight(50)
+        btn_analyze.clicked.connect(self.analyze_frame)
+        analyze_layout.addWidget(btn_analyze)
+        
+        btn_reset = QPushButton("↺ 원본으로 리셋")
+        btn_reset.clicked.connect(self.reset_to_original)
+        analyze_layout.addWidget(btn_reset)
+        
+        right_layout.addLayout(analyze_layout)
+        
+        top_layout.addWidget(right_panel, 1)
+        main_layout.addLayout(top_layout)
+        
+        # 하단: 로그 테이블
+        log_group = QGroupBox("📋 분석 로그")
+        log_layout = QVBoxLayout(log_group)
+        
+        self.log_table = QTableWidget()
+        self.log_table.setColumnCount(4)
+        self.log_table.setHorizontalHeaderLabels(["QR 번호", "해독 정보", "신뢰도", "상태"])
+        self.log_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.log_table.setAlternatingRowColors(True)
+        self.log_table.verticalHeader().setSectionsClickable(False)
+        self.log_table.verticalHeader().setDefaultSectionSize(25)
+        self.log_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.log_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.log_table.setMinimumHeight(200)
+        
+        log_layout.addWidget(self.log_table)
+        main_layout.addWidget(log_group)
+    
+    def apply_dark_theme(self):
+        """다크 테마 적용"""
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #1e1e1e;
+            }
+            QGroupBox {
+                font-weight: bold;
+                border: 2px solid #00ff00;
+                border-radius: 5px;
+                margin-top: 10px;
+                padding-top: 10px;
+                background-color: #2e2e2e;
+                color: #e0e0e0;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+            QCheckBox {
+                color: #00ff00;
+            }
+            QLabel {
+                color: #e0e0e0;
+            }
+            QPushButton {
+                background-color: #2e2e2e;
+                color: #00ff00;
+                border: 1px solid #00ff00;
+                padding: 8px;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #3e3e3e;
+            }
+            QPushButton:pressed {
+                background-color: #1e1e1e;
+            }
+            QSpinBox, QDoubleSpinBox {
+                background-color: #2e2e2e;
+                color: #e0e0e0;
+                border: 1px solid #00ff00;
+                padding: 3px;
+            }
+            QComboBox {
+                background-color: #2e2e2e;
+                color: #e0e0e0;
+                border: 1px solid #00ff00;
+                padding: 3px;
+            }
+            QTableWidget {
+                background-color: #1e1e1e;
+                color: #e0e0e0;
+                gridline-color: #333333;
+                border: 1px solid #00ff00;
+            }
+            QHeaderView::section {
+                background-color: #2e2e2e;
+                color: #00ff00;
+                padding: 5px;
+                border: 1px solid #00ff00;
+            }
+            QTableWidget::item {
+                padding: 5px;
+                color: #e0e0e0;
+            }
+            QTableWidget::item:alternate {
+                background-color: #252525;
+                color: #e0e0e0;
+                padding: 5px;
+            }
+            QTableWidget::item:selected {
+                background-color: #404040;
+            }
+        """)
+    
+    def get_preprocessing_options(self):
+        """전처리 옵션 가져오기"""
+        block_val = self.threshold_block_spin.value()
+        if block_val % 2 == 0:
+            block_val += 1
+        
+        morph_val = self.morphology_kernel_spin.value()
+        if morph_val % 2 == 0:
+            morph_val += 1
+        
+        blur_val = self.blur_kernel_spin.value()
+        if blur_val % 2 == 0:
+            blur_val += 1
+        
+        return {
+            'use_clahe': self.clahe_check.isChecked(),
+            'clahe_clip_limit': self.clahe_clip_spin.value(),
+            'clahe_tile_size': self.clahe_tile_spin.value(),
+            'use_denoise': self.denoise_check.isChecked(),
+            'denoise_method': self.denoise_method.currentText(),
+            'denoise_strength': self.denoise_strength_spin.value(),
+            'bilateral_sigma_color': self.bilateral_sigma_color.value(),
+            'bilateral_sigma_space': self.bilateral_sigma_space.value(),
+            'use_threshold': self.threshold_check.isChecked(),
+            'threshold_block_size': block_val,
+            'threshold_c': self.threshold_c_spin.value(),
+            'use_morphology': self.morphology_check.isChecked(),
+            'morphology_operation': self.morphology_operation.currentText(),
+            'morphology_kernel_size': morph_val,
+            'use_blur': self.blur_check.isChecked(),
+            'blur_kernel_size': blur_val,
+        }
+    
+    def apply_preprocessing(self, frame: np.ndarray) -> np.ndarray:
+        """전처리 적용"""
+        result = frame.copy()
+        opts = self.get_preprocessing_options()
+        
+        # 가우시안 블러
+        if opts.get('use_blur', False):
+            kernel_size = opts.get('blur_kernel_size', 5)
+            result = apply_gaussian_blur(result, kernel_size)
+        
+        # CLAHE
+        if opts.get('use_clahe', False):
+            result = apply_clahe(result, opts.get('clahe_clip_limit', 2.0), opts.get('clahe_tile_size', 8))
+        
+        # 노이즈 제거
+        if opts.get('use_denoise', False):
+            method = opts.get('denoise_method', 'bilateral')
+            strength = opts.get('denoise_strength', 9)
+            if method == 'bilateral':
+                sigma_color = opts.get('bilateral_sigma_color', 75.0)
+                sigma_space = opts.get('bilateral_sigma_space', 75.0)
+                result = apply_bilateral_filter(result, strength, sigma_color, sigma_space)
+            elif method == 'gaussian':
+                result = apply_gaussian_blur(result, strength)
+            elif method == 'median':
+                result = apply_median_blur(result, strength)
+        
+        # 이진화
+        if opts.get('use_threshold', False):
+            result = apply_adaptive_threshold(result, opts.get('threshold_block_size', 11), opts.get('threshold_c', 2))
+        
+        # 형태학적 연산
+        if opts.get('use_morphology', False):
+            result = apply_morphology(result, opts.get('morphology_operation', 'closing'), opts.get('morphology_kernel_size', 5))
+        
+        return result
+    
+    def reset_to_original(self):
+        """원본 프레임으로 리셋"""
+        self.current_frame = self.original_frame.copy()
+        self.image_viewer.set_image(self.current_frame, preserve_zoom=True)
+    
+    def _detect_qr_codes(self, frame: np.ndarray) -> list:
+        """YOLO로 QR 코드 탐지"""
+        detections = []
+        if self.yolo_model:
+            try:
+                results = self.yolo_model(frame, conf=0.25, verbose=False)
+                result = results[0]
+                
+                if result.boxes is not None and len(result.boxes) > 0:
+                    h, w = frame.shape[:2]
+                    for box in result.boxes:
+                        conf = float(box.conf[0])
+                        xyxy = box.xyxy[0].cpu().numpy()
+                        x1, y1, x2, y2 = map(int, xyxy)
+                        
+                        pad = 20
+                        x1 = max(0, x1 - pad)
+                        y1 = max(0, y1 - pad)
+                        x2 = min(w, x2 + pad)
+                        y2 = min(h, y2 + pad)
+                        
+                        detections.append({
+                            'bbox': [x1, y1, x2, y2],
+                            'confidence': conf,
+                            'success': False,
+                            'text': '',
+                            'qr_number': 0
+                        })
+            except Exception as e:
+                pass
+        return detections
+    
+    def _merge_detections(self, detections: list) -> list:
+        """중복 탐지 결과 병합"""
+        if not detections:
+            return []
+        
+        merged = []
+        used = set()
+        
+        for det in detections:
+            x1, y1, x2, y2 = det['bbox']
+            center_x = (x1 + x2) / 2
+            center_y = (y1 + y2) / 2
+            
+            # 이미 사용된 탐지인지 확인
+            is_duplicate = False
+            for i, merged_det in enumerate(merged):
+                m_x1, m_y1, m_x2, m_y2 = merged_det['bbox']
+                m_center_x = (m_x1 + m_x2) / 2
+                m_center_y = (m_y1 + m_y2) / 2
+                
+                # 중심점 거리 계산
+                dist = ((center_x - m_center_x) ** 2 + (center_y - m_center_y) ** 2) ** 0.5
+                
+                # 거리가 임계값 이하면 중복으로 간주
+                threshold = 50
+                if dist < threshold:
+                    is_duplicate = True
+                    # 신뢰도가 높은 것으로 업데이트
+                    if det['confidence'] > merged_det['confidence']:
+                        merged[i] = det
+                    break
+            
+            if not is_duplicate:
+                merged.append(det)
+        
+        return merged
+    
+    def _parse_dbr_result(self, result):
+        """Dynamsoft 결과 파싱 헬퍼 (Worker와 동일한 안전한 로직)"""
+        try:
+            barcode_result = None
+            items = None
+            
+            # 1. get 메서드 시도
+            if hasattr(result, 'get_decoded_barcodes_result'):
+                barcode_result = result.get_decoded_barcodes_result()
+                if barcode_result:
+                    items = barcode_result.get_items() if hasattr(barcode_result, 'get_items') else None
+            
+            # 2. items 직접 접근 시도
+            if not items and hasattr(result, 'items'):
+                items = result.items
+            
+            # 3. 속성 접근 시도
+            if not items and hasattr(result, 'decoded_barcodes_result'):
+                barcode_result = result.decoded_barcodes_result
+                if barcode_result:
+                    items = barcode_result.items if hasattr(barcode_result, 'items') else None
+            
+            # 결과 텍스트 추출
+            if items and len(items) > 0:
+                barcode_item = items[0]
+                if hasattr(barcode_item, 'get_text'):
+                    return barcode_item.get_text()
+                elif hasattr(barcode_item, 'text'):
+                    return barcode_item.text
+                
+        except Exception as e:
+            print(f"파싱 오류: {e}")
+            pass
+            
+        return None
+    
+    def _decode_qr_code(self, frame: np.ndarray, detection: dict):
+        """Dynamsoft로 QR 코드 해독"""
+        if self.dbr_reader is None:
+            return
+            
+        try:
+            x1, y1, x2, y2 = detection['bbox']
+            
+            # 프레임 크기 확인 및 경계 체크
+            h, w = frame.shape[:2]
+            x1 = max(0, min(x1, w - 1))
+            y1 = max(0, min(y1, h - 1))
+            x2 = max(x1 + 1, min(x2, w))
+            y2 = max(y1 + 1, min(y2, h))
+            
+            roi = frame[y1:y2, x1:x2]
+            
+            if roi.size == 0:
+                return
+            
+            # RGB 변환
+            if len(roi.shape) == 3 and roi.shape[2] == 3:
+                rgb_image = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
+            else:
+                rgb_image = cv2.cvtColor(roi, cv2.COLOR_GRAY2RGB)
+            
+            # Dynamsoft 해독 (dbr은 이미 전역적으로 import됨)
+            captured_result = self.dbr_reader.capture(rgb_image, dbr.EnumImagePixelFormat.IPF_RGB_888)
+            
+            # 결과 파싱 (개선된 파서 사용)
+            decoded_text = self._parse_dbr_result(captured_result)
+            
+            if decoded_text:
+                detection['text'] = decoded_text
+                detection['success'] = True
+            else:
+                detection['text'] = ''
+                detection['success'] = False
+                    
+        except Exception as e:
+            # 에러 원인을 터미널에 출력하여 확인
+            print(f"[ERROR] 해독 중 오류 발생: {e}")
+            detection['text'] = ''
+            detection['success'] = False
+    
+    def analyze_frame(self):
+        """프레임 분석"""
+        # 로그 테이블 초기화
+        self.log_table.setRowCount(0)
+        self.qr_counter = 0
+        
+        # 전처리 적용
+        processed_frame = self.apply_preprocessing(self.original_frame.copy())
+        self.current_frame = processed_frame.copy()
+        
+        # 이미지 업데이트 (줌 상태 유지)
+        self.image_viewer.set_image(processed_frame, preserve_zoom=True)
+        
+        # YOLO 탐지 (듀얼 패스: 원본 + 전처리)
+        detections_orig = self._detect_qr_codes(self.original_frame)
+        detections_prep = self._detect_qr_codes(processed_frame)
+        
+        # 결과 합치기 및 중복 제거
+        all_detections = detections_orig + detections_prep
+        detections = self._merge_detections(all_detections)
+        
+        # Dynamsoft 해독 (원본 프레임에서 먼저 시도, 실패하면 전처리 프레임에서 시도)
+        decoded_count = 0
+        if self.dbr_reader and len(detections) > 0:
+            for det in detections:
+                # 원본 프레임에서 먼저 시도
+                if not det.get('success', False):
+                    self._decode_qr_code(self.original_frame, det)
+                # 실패하면 전처리 프레임에서 시도
+                if not det.get('success', False):
+                    self._decode_qr_code(processed_frame, det)
+                
+                if det.get('success', False):
+                    decoded_count += 1
+                
+                # QR 번호 부여
+                self.qr_counter += 1
+                det['qr_number'] = self.qr_counter
+                
+                # 로그에 추가
+                self._add_log_entry(det)
+        
+        # 탐지 결과 시각화 (QR 번호만 표시, 해독 성공 여부에 따라 색상 구분)
+        if len(detections) > 0:
+            vis_frame = processed_frame.copy()
+            for det in detections:
+                x1, y1, x2, y2 = det['bbox']
+                # 해독 성공: 초록색, 실패: 빨간색
+                color = (0, 255, 0) if det.get('success', False) else (0, 0, 255)
+                cv2.rectangle(vis_frame, (x1, y1), (x2, y2), color, 2)
+                
+                # QR 번호 표시 (모든 경우)
+                qr_num = det.get('qr_number', 0)
+                if qr_num > 0:
+                    cv2.putText(vis_frame, f"QR-{qr_num}", (x1, y1-10),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+            self.image_viewer.set_image(vis_frame, preserve_zoom=True)
+            self.current_frame = vis_frame
+    
+    def _add_log_entry(self, det: dict):
+        """로그 테이블에 항목 추가"""
+        row_count = self.log_table.rowCount()
+        self.log_table.insertRow(row_count)
+        
+        qr_number = det.get('qr_number', 0)
+        decoded_text = det.get('text', '') if det.get('success', False) else '해독 실패'
+        confidence = det.get('confidence', 0.0)
+        status = "✅ 성공" if det.get('success', False) else "❌ 실패"
+        
+        item0 = QTableWidgetItem(f"QR-{qr_number}")
+        item0.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.log_table.setItem(row_count, 0, item0)
+        
+        item1 = QTableWidgetItem(decoded_text[:50] if len(decoded_text) > 50 else decoded_text)
+        item1.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.log_table.setItem(row_count, 1, item1)
+        
+        item2 = QTableWidgetItem(f"{confidence:.2f}")
+        item2.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.log_table.setItem(row_count, 2, item2)
+        
+        item3 = QTableWidgetItem(status)
+        item3.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.log_table.setItem(row_count, 3, item3)
+        
+        self.log_table.scrollToBottom()
+
+
+# ============================================================================
 # 메인 윈도우 클래스
 # ============================================================================
 
@@ -3336,7 +4050,9 @@ class QRAnalysisMainWindow(QMainWindow):
         # 10줄 정도 보이도록 높이 설정 (헤더 + 10행 * 약 30px)
         self.log_table.setMinimumHeight(330)
         self.log_table.setMaximumHeight(330)
-        
+        # 더블클릭 이벤트 연결
+        self.log_table.itemDoubleClicked.connect(self.on_log_table_double_clicked)
+
         log_layout.addWidget(self.log_table)
         content_layout.addWidget(log_group)
         
@@ -4453,6 +5169,42 @@ class QRAnalysisMainWindow(QMainWindow):
         
         # 자동 스크롤
         self.log_table.scrollToBottom()
+    
+    def on_log_table_double_clicked(self, item):
+        """로그 테이블 더블클릭 시 프레임 분석 창 열기"""
+        if not self.video_path or not self.yolo_model:
+            QMessageBox.warning(self, "경고", "영상과 모델을 먼저 로드하세요.")
+            return
+        
+        # 선택된 행의 프레임 번호 가져오기
+        row = item.row()
+        frame_no_item = self.log_table.item(row, 1)  # Frame No 컬럼
+        if not frame_no_item:
+            return
+        
+        try:
+            frame_no = int(frame_no_item.text().strip())
+        except ValueError:
+            QMessageBox.warning(self, "오류", "유효하지 않은 프레임 번호입니다.")
+            return
+        
+        # 비디오에서 해당 프레임 읽기
+        cap = cv2.VideoCapture(self.video_path)
+        if not cap.isOpened():
+            QMessageBox.warning(self, "오류", "비디오 파일을 열 수 없습니다.")
+            return
+        
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
+        ret, frame = cap.read()
+        cap.release()
+        
+        if not ret:
+            QMessageBox.warning(self, "오류", f"프레임 {frame_no}를 읽을 수 없습니다.")
+            return
+        
+        # FrameAnalysisWindow 열기
+        analysis_window = FrameAnalysisWindow(frame, self.yolo_model, self.dbr_reader, self)
+        analysis_window.show()
     
     # ============================================================================
     # UI 업데이트 메서드
