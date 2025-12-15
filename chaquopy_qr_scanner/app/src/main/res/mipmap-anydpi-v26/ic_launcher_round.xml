@@ -3,3 +3,4 @@
     <background android:drawable="@android:color/white"/>
     <foreground android:drawable="@android:drawable/ic_menu_camera"/>
 </adaptive-icon>
+

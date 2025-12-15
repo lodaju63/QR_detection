@@ -635,11 +635,16 @@ class AnalysisWorker(QThread):
     """
     result_ready = pyqtSignal(int, list, dict)  # (frame_idx, detections, metrics)
 
-    def __init__(self, input_queue, yolo_model, dbr_reader, conf_threshold=0.25):
+    def __init__(self, input_queue, yolo_model, dbr_reader=None, conf_threshold=0.25, 
+                 resnet_model=None, resnet_class_names=None, resnet_preprocess=None, processing_mode='decode'):
         super().__init__()
         self.input_queue = input_queue
         self.yolo_model = yolo_model
         self.dbr_reader = dbr_reader
+        self.resnet_model = resnet_model
+        self.resnet_class_names = resnet_class_names or []
+        self.resnet_preprocess = resnet_preprocess
+        self.processing_mode = processing_mode  # 'decode' 또는 'classify'
         self.conf_threshold = conf_threshold
         self.preprocessing_options = {}
         self.roi_rect = None  # (x1, y1, x2, y2)
@@ -722,14 +727,25 @@ class AnalysisWorker(QThread):
                 all_detections = detections_orig + detections_prep
                 detections = self._merge_detections(all_detections)
 
-                # 4. Dynamsoft 해독 (크롭된 프레임 좌표로 해독)
-                for det in detections:
-                    # 원본 프레임에서 먼저 시도
-                    if not det.get('success', False):
-                        self._decode_qr_code(frame, det)
-                    # 실패하면 전처리 프레임에서 시도
-                    if not det.get('success', False):
-                        self._decode_qr_code(processed_frame, det)
+                # 4. 해독 또는 분류 (크롭된 프레임 좌표로 수행)
+                if self.processing_mode == 'classify' and self.resnet_model:
+                    # ResNet 분류 모드
+                    for det in detections:
+                        # 원본 프레임에서 먼저 시도
+                        if not det.get('success', False):
+                            self._classify_with_resnet(frame, det)
+                        # 실패하면 전처리 프레임에서 시도
+                        if not det.get('success', False):
+                            self._classify_with_resnet(processed_frame, det)
+                else:
+                    # Dynamsoft 해독 모드
+                    for det in detections:
+                        # 원본 프레임에서 먼저 시도
+                        if not det.get('success', False):
+                            self._decode_qr_code(frame, det)
+                        # 실패하면 전처리 프레임에서 시도
+                        if not det.get('success', False):
+                            self._decode_qr_code(processed_frame, det)
                 
                 # ROI가 있으면 탐지 결과 좌표를 원본 프레임 좌표로 변환 (해독 후 변환)
                 if self.roi_rect:
@@ -964,6 +980,60 @@ class AnalysisWorker(QThread):
             else:
                 detection['text'] = ''
                 detection['success'] = False
+                    
+        except Exception as e:
+            detection['text'] = ''
+            detection['success'] = False
+    
+    def _classify_with_resnet(self, frame: np.ndarray, detection: Dict):
+        """ResNet으로 QR 코드 분류"""
+        if self.resnet_model is None or self.resnet_preprocess is None:
+            return
+            
+        try:
+            import torch
+            from PIL import Image
+            
+            x1, y1, x2, y2 = detection['bbox']
+            
+            # 프레임 크기 확인 및 경계 체크
+            h, w = frame.shape[:2]
+            x1 = max(0, min(x1, w - 1))
+            y1 = max(0, min(y1, h - 1))
+            x2 = max(x1 + 1, min(x2, w))
+            y2 = max(y1 + 1, min(y2, h))
+            
+            roi = frame[y1:y2, x1:x2]
+            
+            if roi.size == 0:
+                return
+            
+            # 이미지 크기 체크
+            if x2 - x1 < 10 or y2 - y1 < 10:
+                return
+            
+            # BGR to RGB 변환
+            if len(roi.shape) == 3 and roi.shape[2] == 3:
+                rgb_image = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
+            else:
+                rgb_image = cv2.cvtColor(roi, cv2.COLOR_GRAY2RGB)
+            
+            # PIL Image로 변환 및 전처리
+            pil_img = Image.fromarray(rgb_image)
+            input_tensor = self.resnet_preprocess(pil_img).unsqueeze(0)
+            
+            # ResNet 분류
+            with torch.no_grad():
+                outputs = self.resnet_model(input_tensor)
+                probs = torch.nn.functional.softmax(outputs[0], dim=0)
+                conf, idx = torch.max(probs, 0)
+                label = self.resnet_class_names[idx] if idx < len(self.resnet_class_names) else f"Class_{idx}"
+                score = conf.item() * 100
+            
+            # Detection 업데이트
+            detection['text'] = label
+            detection['success'] = True
+            detection['confidence'] = score  # ResNet 신뢰도 저장
                     
         except Exception as e:
             detection['text'] = ''
@@ -1239,13 +1309,17 @@ class VideoManager(QObject):
     finished = pyqtSignal()
     error_occurred = pyqtSignal(str)
     
-    def __init__(self, yolo_model, dbr_reader):
+    def __init__(self, yolo_model, dbr_reader=None, resnet_model=None, resnet_class_names=None, resnet_preprocess=None, processing_mode='decode'):
         super().__init__()
         # 통신용 큐 (크기 1 = 최신 프레임만 유지, 자동 프레임 드롭)
         self.queue = queue.Queue(maxsize=1)
         
         self.yolo_model = yolo_model
         self.dbr_reader = dbr_reader
+        self.resnet_model = resnet_model
+        self.resnet_class_names = resnet_class_names or []
+        self.resnet_preprocess = resnet_preprocess
+        self.processing_mode = processing_mode  # 'decode' 또는 'classify'
         self.roi_rect = None  # (x1, y1, x2, y2)
         
         self.play_thread = None
@@ -1256,7 +1330,10 @@ class VideoManager(QObject):
     def start(self, video_path, preprocessing_options=None, conf_threshold=0.25, frame_interval=1):
         """비동기 처리 시작"""
         # 1. 분석 스레드 생성 및 시작
-        self.analysis_thread = AnalysisWorker(self.queue, self.yolo_model, self.dbr_reader, conf_threshold)
+        self.analysis_thread = AnalysisWorker(
+            self.queue, self.yolo_model, self.dbr_reader, conf_threshold,
+            self.resnet_model, self.resnet_class_names, self.resnet_preprocess, self.processing_mode
+        )
         if preprocessing_options:
             self.analysis_thread.update_options(preprocessing_options)
         # ROI 설정 (self.roi_rect가 설정되어 있으면 전달)
@@ -1376,6 +1453,10 @@ class VideoProcessorWorker(QThread):
         self.video_path: Optional[str] = None
         self.yolo_model = None
         self.dbr_reader = None
+        self.resnet_model = None
+        self.resnet_class_names = []
+        self.resnet_preprocess = None
+        self.processing_mode = 'decode'  # 'decode' 또는 'classify'
         self.is_running = False
         self.is_paused = False
         self.conf_threshold = 0.25
@@ -1396,10 +1477,17 @@ class VideoProcessorWorker(QThread):
         """비디오 파일 경로 설정"""
         self.video_path = video_path
         
-    def set_model(self, yolo_model, dbr_reader):
-        """YOLO 및 Dynamsoft 모델 설정"""
+    def set_model(self, yolo_model, dbr_reader=None, resnet_model=None, resnet_class_names=None, resnet_preprocess=None):
+        """YOLO 및 Dynamsoft/ResNet 모델 설정"""
         self.yolo_model = yolo_model
         self.dbr_reader = dbr_reader
+        self.resnet_model = resnet_model
+        self.resnet_class_names = resnet_class_names or []
+        self.resnet_preprocess = resnet_preprocess
+    
+    def set_processing_mode(self, mode: str):
+        """처리 모드 설정"""
+        self.processing_mode = mode
         
     def set_conf_threshold(self, threshold: float):
         """YOLO 신뢰도 임계값 설정"""
@@ -1556,14 +1644,24 @@ class VideoProcessorWorker(QThread):
                 all_detections = detections_orig + detections_prep
                 detections = self._merge_detections(all_detections)
                 
-                # Dynamsoft 해독 (크롭된 프레임 좌표로 해독)
-                for det in detections:
-                    # 원본 프레임에서 먼저 시도
-                    if not det.get('success', False):
-                        self._decode_qr_code(frame, det)
-                    # 실패하면 전처리 프레임에서 시도
-                    if not det.get('success', False):
-                        self._decode_qr_code(preprocessed_frame, det)
+                # 분석 모드에 따라 분류 또는 해독
+                if self.processing_mode == 'classify' and self.resnet_model:
+                    for det in detections:
+                        # 원본 프레임에서 먼저 시도
+                        if not det.get('success', False):
+                            self._classify_with_resnet(frame, det)
+                        # 실패하면 전처리 프레임에서 시도
+                        if not det.get('success', False):
+                            self._classify_with_resnet(preprocessed_frame, det)
+                else:
+                    # Dynamsoft 해독 (크롭된 프레임 좌표로 해독)
+                    for det in detections:
+                        # 원본 프레임에서 먼저 시도
+                        if not det.get('success', False):
+                            self._decode_qr_code(frame, det)
+                        # 실패하면 전처리 프레임에서 시도
+                        if not det.get('success', False):
+                            self._decode_qr_code(preprocessed_frame, det)
                 
                 # ROI가 있으면 탐지 결과 좌표를 원본 프레임 좌표로 변환 (해독 후 변환)
                 if self.roi_rect:
@@ -1738,6 +1836,60 @@ class VideoProcessorWorker(QThread):
         
         return merged
     
+    def _classify_with_resnet(self, frame: np.ndarray, detection: Dict):
+        """ResNet으로 QR 코드 분류"""
+        if self.resnet_model is None or self.resnet_preprocess is None:
+            return
+            
+        try:
+            import torch
+            from PIL import Image
+            
+            x1, y1, x2, y2 = detection['bbox']
+            
+            # 프레임 크기 확인 및 경계 체크
+            h, w = frame.shape[:2]
+            x1 = max(0, min(x1, w - 1))
+            y1 = max(0, min(y1, h - 1))
+            x2 = max(x1 + 1, min(x2, w))
+            y2 = max(y1 + 1, min(y2, h))
+            
+            roi = frame[y1:y2, x1:x2]
+            
+            if roi.size == 0:
+                return
+            
+            # 이미지 크기 체크
+            if x2 - x1 < 10 or y2 - y1 < 10:
+                return
+            
+            # BGR to RGB 변환
+            if len(roi.shape) == 3 and roi.shape[2] == 3:
+                rgb_image = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
+            else:
+                rgb_image = cv2.cvtColor(roi, cv2.COLOR_GRAY2RGB)
+            
+            # PIL Image로 변환 및 전처리
+            pil_img = Image.fromarray(rgb_image)
+            input_tensor = self.resnet_preprocess(pil_img).unsqueeze(0)
+            
+            # ResNet 분류
+            with torch.no_grad():
+                outputs = self.resnet_model(input_tensor)
+                probs = torch.nn.functional.softmax(outputs[0], dim=0)
+                conf, idx = torch.max(probs, 0)
+                label = self.resnet_class_names[idx] if idx < len(self.resnet_class_names) else f"Class_{idx}"
+                score = conf.item() * 100
+            
+            # Detection 업데이트
+            detection['text'] = label
+            detection['success'] = True
+            detection['confidence'] = score  # ResNet 신뢰도 저장
+                    
+        except Exception as e:
+            detection['text'] = ''
+            detection['success'] = False
+    
     def _decode_qr_code(self, frame: np.ndarray, detection: Dict):
         """Dynamsoft로 QR 코드 해독"""
         if self.dbr_reader is None:
@@ -1890,14 +2042,18 @@ class WebcamAIWorker(QThread):
     """웹캠용 AI 워커 (base.py의 AIWorker와 유사)"""
     result_ready = pyqtSignal(list)  # 결과 전송 시그널
 
-    def __init__(self, frame_queue, yolo_model, dbr_reader, conf_threshold=0.25):
+    def __init__(self, frame_queue, yolo_model, dbr_reader=None, resnet_model=None, resnet_class_names=None, resnet_preprocess=None, conf_threshold=0.25):
         super().__init__()
         self.frame_queue = frame_queue
         self.running = True
         self.conf_threshold = conf_threshold
         self.yolo_model = yolo_model
         self.dbr_reader = dbr_reader
+        self.resnet_model = resnet_model
+        self.resnet_class_names = resnet_class_names or []
+        self.resnet_preprocess = resnet_preprocess
         self.roi_rect = None  # (x1, y1, x2, y2)
+        self.webcam_mode = 'resnet' if resnet_model else 'dynamsoft'
     
     def set_roi(self, roi_rect: Optional[Tuple[int, int, int, int]]):
         """ROI 영역 설정"""
@@ -1964,8 +2120,46 @@ class WebcamAIWorker(QThread):
                         det['bbox'] = [x1 + roi_offset_x, y1 + roi_offset_y, 
                                       x2 + roi_offset_x, y2 + roi_offset_y]
             
-            # Dynamsoft 해독
-            if self.dbr_reader is not None and len(detections) > 0:
+            # ResNet 모드인 경우 ResNet 분류, 아니면 Dynamsoft 해독
+            if self.webcam_mode == 'resnet' and self.resnet_model is not None and len(detections) > 0:
+                for det in detections:
+                    x1, y1, x2, y2 = det['bbox']
+                    roi = frame[y1:y2, x1:x2]
+                    
+                    if roi.size == 0:
+                        continue
+                    
+                    # 이미지 크기 체크
+                    if x2 - x1 < 10 or y2 - y1 < 10:
+                        results.append([x1, y1, x2, y2, "", 0.0])
+                        continue
+                    
+                    try:
+                        import torch
+                        from PIL import Image
+                        
+                        # BGR to RGB 변환
+                        if len(roi.shape) == 3 and roi.shape[2] == 3:
+                            rgb_image = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
+                        else:
+                            rgb_image = cv2.cvtColor(roi, cv2.COLOR_GRAY2RGB)
+                        
+                        # PIL Image로 변환 및 전처리
+                        pil_img = Image.fromarray(rgb_image)
+                        input_tensor = self.resnet_preprocess(pil_img).unsqueeze(0)
+                        
+                        # ResNet 분류
+                        with torch.no_grad():
+                            outputs = self.resnet_model(input_tensor)
+                            probs = torch.nn.functional.softmax(outputs[0], dim=0)
+                            conf, idx = torch.max(probs, 0)
+                            label = self.resnet_class_names[idx] if idx < len(self.resnet_class_names) else f"Class_{idx}"
+                            confidence_score = conf.item() * 100  # 백분율로 변환
+                        
+                        results.append([x1, y1, x2, y2, str(label), confidence_score])
+                    except Exception as e:
+                        results.append([x1, y1, x2, y2, ""])
+            elif self.dbr_reader is not None and len(detections) > 0:
                 for det in detections:
                     x1, y1, x2, y2 = det['bbox']
                     roi = frame[y1:y2, x1:x2]
@@ -2025,11 +2219,11 @@ class WebcamAIWorker(QThread):
                             results.append([x1, y1, x2, y2, ""])
                             
                     except Exception as e:
-                        results.append([x1, y1, x2, y2, ""])
+                        results.append([x1, y1, x2, y2, "", 0.0])
             elif len(detections) > 0:
                 for det in detections:
                     x1, y1, x2, y2 = det['bbox']
-                    results.append([x1, y1, x2, y2, ""])
+                    results.append([x1, y1, x2, y2, "", 0.0])
 
             self.result_ready.emit(results)
             self.frame_queue.task_done()
@@ -2140,7 +2334,10 @@ class WebcamVideoPlayer(QThread):
 
             # 시각화
             for res in self.latest_ai_results:
-                x1, y1, x2, y2, text = res
+                if len(res) >= 6:
+                    x1, y1, x2, y2, text, confidence = res
+                else:
+                    x1, y1, x2, y2, text = res
                 color = (0, 255, 0) if text else (0, 0, 255)
                 cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
                 if text:
@@ -2176,7 +2373,7 @@ class WebcamVideoPlayer(QThread):
 class WebcamWindow(QMainWindow):
     """웹캠 모드 전용 창"""
     
-    def __init__(self, yolo_model, dbr_reader):
+    def __init__(self, yolo_model, dbr_reader=None, resnet_model=None, resnet_class_names=None, resnet_preprocess=None):
         super().__init__()
         self.setWindowTitle("웹캠 QR 분석")
         self.resize(1280, 900)
@@ -2184,6 +2381,10 @@ class WebcamWindow(QMainWindow):
         # 모델 저장
         self.yolo_model = yolo_model
         self.dbr_reader = dbr_reader
+        self.resnet_model = resnet_model
+        self.resnet_class_names = resnet_class_names or []
+        self.resnet_preprocess = resnet_preprocess
+        self.webcam_mode = 'resnet' if resnet_model else 'dynamsoft'  # 웹캠 모드: 'dynamsoft' 또는 'resnet'
 
         # 로그 관련 변수
         self.frame_counter = 0
@@ -2230,127 +2431,6 @@ class WebcamWindow(QMainWindow):
         camera_layout.addWidget(self.btn_connect_camera)
         
         self.layout.addWidget(camera_group)
-
-        # 하드웨어 기본값 저장소
-        self.default_hw_settings = {}
-
-        # 하드웨어 전처리 옵션 섹션 (한번에 다 보이게)
-        hw_group = QGroupBox("⚙️ 하드웨어 전처리 옵션 (CPU 부하 0%)")
-        hw_layout = QGridLayout(hw_group)
-        # 반응형 레이아웃 설정: 라벨(0)은 고정, 슬라이더(1)는 확장, SpinBox(2)는 고정, 체크박스(3)는 고정
-        hw_layout.setColumnStretch(0, 0)  # 라벨: 고정 크기
-        hw_layout.setColumnStretch(1, 1)  # 슬라이더: 확장 가능
-        hw_layout.setColumnStretch(2, 0)  # SpinBox: 고정 크기
-        hw_layout.setColumnStretch(3, 0)  # 체크박스: 고정 크기
-        
-        # 밝기 (Brightness)
-        hw_layout.addWidget(QLabel("밝기 (Brightness):"), 0, 0)
-        self.brightness_slider = QSlider(Qt.Orientation.Horizontal)
-        self.brightness_slider.setMinimum(0)
-        self.brightness_slider.setMaximum(2550)  # 0-255를 10배로 확대 (소수점 한자리 지원)
-        self.brightness_slider.valueChanged.connect(self.on_brightness_slider_changed)
-        hw_layout.addWidget(self.brightness_slider, 0, 1)
-        self.brightness_spin = QDoubleSpinBox()
-        self.brightness_spin.setRange(0.0, 255.0)
-        self.brightness_spin.setDecimals(1)
-        self.brightness_spin.setSingleStep(0.1)
-        self.brightness_spin.setMinimumWidth(80)
-        self.brightness_spin.setMaximumWidth(100)
-        self.brightness_spin.valueChanged.connect(self.on_brightness_spin_changed)
-        hw_layout.addWidget(self.brightness_spin, 0, 2)
-        
-        # 노출 (Exposure)
-        hw_layout.addWidget(QLabel("노출 (Exposure):"), 1, 0)
-        self.exposure_slider = QSlider(Qt.Orientation.Horizontal)
-        self.exposure_slider.setMinimum(-130)  # -13.0을 10배로 확대
-        self.exposure_slider.setMaximum(10)  # 1.0을 10배로 확대
-        self.exposure_slider.valueChanged.connect(self.on_exposure_slider_changed)
-        hw_layout.addWidget(self.exposure_slider, 1, 1)
-        self.exposure_spin = QDoubleSpinBox()
-        self.exposure_spin.setRange(-13.0, 1.0)
-        self.exposure_spin.setDecimals(1)
-        self.exposure_spin.setSingleStep(0.1)
-        self.exposure_spin.setMinimumWidth(80)
-        self.exposure_spin.setMaximumWidth(100)
-        self.exposure_spin.valueChanged.connect(self.on_exposure_spin_changed)
-        hw_layout.addWidget(self.exposure_spin, 1, 2)
-        self.exposure_auto_check = QCheckBox("자동 노출")
-        self.exposure_auto_check.clicked.connect(self.on_exposure_auto_changed)
-        hw_layout.addWidget(self.exposure_auto_check, 1, 3)
-        
-        # 게인 (Gain)
-        hw_layout.addWidget(QLabel("게인 (Gain):"), 2, 0)
-        self.gain_slider = QSlider(Qt.Orientation.Horizontal)
-        self.gain_slider.setMinimum(0)
-        self.gain_slider.setMaximum(1000)  # 0-100을 10배로 확대
-        self.gain_slider.valueChanged.connect(self.on_gain_slider_changed)
-        hw_layout.addWidget(self.gain_slider, 2, 1)
-        self.gain_spin = QDoubleSpinBox()
-        self.gain_spin.setRange(0.0, 100.0)
-        self.gain_spin.setDecimals(1)
-        self.gain_spin.setSingleStep(0.1)
-        self.gain_spin.setMinimumWidth(80)
-        self.gain_spin.setMaximumWidth(100)
-        self.gain_spin.valueChanged.connect(self.on_gain_spin_changed)
-        hw_layout.addWidget(self.gain_spin, 2, 2)
-        
-        # 대비 (Contrast)
-        hw_layout.addWidget(QLabel("대비 (Contrast):"), 3, 0)
-        self.contrast_slider = QSlider(Qt.Orientation.Horizontal)
-        self.contrast_slider.setMinimum(0)
-        self.contrast_slider.setMaximum(2550)  # 0-255를 10배로 확대
-        self.contrast_slider.valueChanged.connect(self.on_contrast_slider_changed)
-        hw_layout.addWidget(self.contrast_slider, 3, 1)
-        self.contrast_spin = QDoubleSpinBox()
-        self.contrast_spin.setRange(0.0, 255.0)
-        self.contrast_spin.setDecimals(1)
-        self.contrast_spin.setSingleStep(0.1)
-        self.contrast_spin.setMinimumWidth(80)
-        self.contrast_spin.setMaximumWidth(100)
-        self.contrast_spin.valueChanged.connect(self.on_contrast_spin_changed)
-        hw_layout.addWidget(self.contrast_spin, 3, 2)
-        
-        # 초점 (Focus) - 가장 중요
-        hw_layout.addWidget(QLabel("초점 (Focus) ⭐:"), 4, 0)
-        self.focus_slider = QSlider(Qt.Orientation.Horizontal)
-        self.focus_slider.setMinimum(0)
-        self.focus_slider.setMaximum(2500)  # 0-250을 10배로 확대
-        self.focus_slider.valueChanged.connect(self.on_focus_slider_changed)
-        hw_layout.addWidget(self.focus_slider, 4, 1)
-        self.focus_spin = QDoubleSpinBox()
-        self.focus_spin.setRange(0.0, 250.0)
-        self.focus_spin.setDecimals(1)
-        self.focus_spin.setSingleStep(0.1)
-        self.focus_spin.setMinimumWidth(80)
-        self.focus_spin.setMaximumWidth(100)
-        self.focus_spin.valueChanged.connect(self.on_focus_spin_changed)
-        hw_layout.addWidget(self.focus_spin, 4, 2)
-        self.focus_auto_check = QCheckBox("자동 초점")
-        self.focus_auto_check.clicked.connect(self.on_focus_auto_changed)
-        hw_layout.addWidget(self.focus_auto_check, 4, 3)
-        
-        # 해상도 (Resolution) - 제일 아래
-        hw_layout.addWidget(QLabel("해상도 (Resolution):"), 5, 0)
-        self.resolution_combo = QComboBox()
-        self.resolution_combo.addItems([
-            "320x240 (QVGA)",
-            "640x480 (VGA)",
-            "800x600 (SVGA)",
-            "1024x768 (XGA)",
-            "1280x720 (HD)",
-            "1280x1024 (SXGA)",
-            "1920x1080 (Full HD)"
-        ])
-        self.resolution_combo.currentTextChanged.connect(self.on_resolution_changed)
-        hw_layout.addWidget(self.resolution_combo, 5, 1, 1, 2)
-        
-        # 기본값 되돌리기 버튼
-        self.btn_reset_all = QPushButton("↺ 모든 설정을 기본값으로 되돌리기")
-        self.btn_reset_all.clicked.connect(self.reset_to_default)
-        hw_layout.addWidget(self.btn_reset_all, 6, 0, 1, 4)
-        
-        # 옵션 섹션을 직접 추가 (스크롤 제한 없이 한번에 다 보이게)
-        self.layout.addWidget(hw_group, 0)
 
         # 로그 섹션
         log_group = QGroupBox("📋 데이터 로그")
@@ -2428,7 +2508,13 @@ class WebcamWindow(QMainWindow):
         
         # 새로운 카메라 소스로 스레드 생성
         camera_source = self._get_camera_source()
-        self.ai_worker = WebcamAIWorker(self.frame_queue, self.yolo_model, self.dbr_reader)
+        if self.webcam_mode == 'resnet' and self.resnet_model:
+            self.ai_worker = WebcamAIWorker(
+                self.frame_queue, self.yolo_model, None,
+                self.resnet_model, self.resnet_class_names, self.resnet_preprocess
+            )
+        else:
+            self.ai_worker = WebcamAIWorker(self.frame_queue, self.yolo_model, self.dbr_reader)
         self.player = WebcamVideoPlayer(self.frame_queue, camera_source)
         
         # 시그널 연결
@@ -2436,8 +2522,6 @@ class WebcamWindow(QMainWindow):
         self.ai_worker.result_ready.connect(self.on_ai_result)
         # 플레이어에도 결과 전달 (시각화용)
         self.ai_worker.result_ready.connect(self.player.update_ai_results)
-        # 초기 설정값 받기 연결
-        self.player.initial_settings_signal.connect(self.init_sliders)
         
         # 시작
         self.ai_worker.start()
@@ -2812,11 +2896,16 @@ class WebcamWindow(QMainWindow):
         # 결과를 로그에 추가
         if results:
             for res in results:
-                x1, y1, x2, y2, text = res
-                if text:
-                    self._add_log_entry(self.frame_counter, text, "✅ 성공")
+                if len(res) >= 6:
+                    x1, y1, x2, y2, text, confidence = res
                 else:
-                    self._add_log_entry(self.frame_counter, "인식 실패", "❌ 실패")
+                    x1, y1, x2, y2, text = res
+                    confidence = 0.0
+                
+                if text:
+                    self._add_log_entry(self.frame_counter, text, "✅ 성공", confidence)
+                else:
+                    self._add_log_entry(self.frame_counter, "인식 실패", "❌ 실패", 0.0)
     
     def set_log_filter(self, mode: str):
         """로그 필터 설정"""
@@ -2889,7 +2978,7 @@ class WebcamWindow(QMainWindow):
         
         self.log_table.scrollToBottom()
     
-    def _add_log_entry(self, frame_no: int, decoded_data: str, status: str):
+    def _add_log_entry(self, frame_no: int, decoded_data: str, status: str, confidence: float = 0.0):
         """로그 테이블에 항목 추가"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         
@@ -2898,6 +2987,7 @@ class WebcamWindow(QMainWindow):
         frame_no_clean = ' '.join(str(frame_no).split())
         decoded_data_clean = ' '.join(str(decoded_data).split())
         status_clean = ' '.join(str(status).split())
+        confidence_str = f"{confidence:.2f}" if confidence > 0 else "-"
         
         # 모든 로그 항목을 저장 (정리된 데이터로 저장)
         log_entry = {
@@ -2905,6 +2995,7 @@ class WebcamWindow(QMainWindow):
             'frame_no': frame_no_clean,
             'decoded_data': decoded_data_clean,
             'status': status_clean,
+            'confidence': confidence_str,
             'is_success': '✅' in status_clean
         }
         self.all_log_entries.append(log_entry)
@@ -2946,6 +3037,10 @@ class WebcamWindow(QMainWindow):
             item3.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             self.log_table.setItem(row_count, 3, item3)
             
+            item4 = QTableWidgetItem(confidence_str)
+            item4.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.log_table.setItem(row_count, 4, item4)
+            
             # 자동 스크롤
             self.log_table.scrollToBottom()
             
@@ -2981,30 +3076,11 @@ class WebcamWindow(QMainWindow):
         return p
 
     def closeEvent(self, event):
-        # 웹캠 모드 종료 시 원래 설정으로 복원
-        if self.player and self.default_hw_settings and self.player.cap is not None and self.player.cap.isOpened():
-            try:
-                s = self.default_hw_settings
-                # 원래 설정으로 복원
-                if 'brightness' in s and s['brightness'] != -1:
-                    self.player.cap.set(cv2.CAP_PROP_BRIGHTNESS, s['brightness'])
-                if 'contrast' in s and s['contrast'] != -1:
-                    self.player.cap.set(cv2.CAP_PROP_CONTRAST, s['contrast'])
-                if 'gain' in s and s['gain'] != -1:
-                    self.player.cap.set(cv2.CAP_PROP_GAIN, s['gain'])
-                if 'auto_exposure' in s:
-                    self.player.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, s['auto_exposure'])
-                    if s['auto_exposure'] != 1.0 and s['auto_exposure'] != 0.75 and 'exposure' in s:
-                        self.player.cap.set(cv2.CAP_PROP_EXPOSURE, s['exposure'])
-                if 'autofocus' in s:
-                    self.player.cap.set(cv2.CAP_PROP_AUTOFOCUS, s['autofocus'])
-                    if s['autofocus'] != 1 and 'focus' in s and s['focus'] != -1:
-                        self.player.cap.set(cv2.CAP_PROP_FOCUS, s['focus'])
-            except Exception as e:
-                pass
-        
-        self.player.stop()
-        self.ai_worker.stop()
+        # 스레드 종료
+        if self.player:
+            self.player.stop()
+        if self.ai_worker:
+            self.ai_worker.stop()
         # 메인 윈도우의 참조 정리
         if hasattr(self, 'parent_window') and self.parent_window:
             self.parent_window.webcam_window = None
@@ -3092,7 +3168,7 @@ class ZoomableGraphicsView(QGraphicsView):
 class FrameAnalysisWindow(QMainWindow):
     """프레임 집중 분석 창"""
     
-    def __init__(self, frame: np.ndarray, yolo_model, dbr_reader, parent=None):
+    def __init__(self, frame: np.ndarray, yolo_model, dbr_reader=None, resnet_model=None, resnet_class_names=None, resnet_preprocess=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("🔍 프레임 집중 분석")
         self.resize(1400, 900)
@@ -3101,7 +3177,11 @@ class FrameAnalysisWindow(QMainWindow):
         self.current_frame = frame.copy()
         self.yolo_model = yolo_model
         self.dbr_reader = dbr_reader
+        self.resnet_model = resnet_model
+        self.resnet_class_names = resnet_class_names or []
+        self.resnet_preprocess = resnet_preprocess
         self.qr_counter = 0  # QR 번호 카운터
+        self.processing_mode = 'classify' if resnet_model else 'decode'
         
         self.init_ui()
         self.apply_dark_theme()
@@ -3635,6 +3715,60 @@ class FrameAnalysisWindow(QMainWindow):
             detection['text'] = ''
             detection['success'] = False
     
+    def _classify_with_resnet(self, frame: np.ndarray, detection: dict):
+        """ResNet으로 QR 코드 분류"""
+        if self.resnet_model is None or self.resnet_preprocess is None:
+            return
+            
+        try:
+            import torch
+            from PIL import Image
+            
+            x1, y1, x2, y2 = detection['bbox']
+            
+            # 프레임 크기 확인 및 경계 체크
+            h, w = frame.shape[:2]
+            x1 = max(0, min(x1, w - 1))
+            y1 = max(0, min(y1, h - 1))
+            x2 = max(x1 + 1, min(x2, w))
+            y2 = max(y1 + 1, min(y2, h))
+            
+            roi = frame[y1:y2, x1:x2]
+            
+            if roi.size == 0:
+                return
+            
+            # 이미지 크기 체크
+            if x2 - x1 < 10 or y2 - y1 < 10:
+                return
+            
+            # BGR to RGB 변환
+            if len(roi.shape) == 3 and roi.shape[2] == 3:
+                rgb_image = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
+            else:
+                rgb_image = cv2.cvtColor(roi, cv2.COLOR_GRAY2RGB)
+            
+            # PIL Image로 변환 및 전처리
+            pil_img = Image.fromarray(rgb_image)
+            input_tensor = self.resnet_preprocess(pil_img).unsqueeze(0)
+            
+            # ResNet 분류
+            with torch.no_grad():
+                outputs = self.resnet_model(input_tensor)
+                probs = torch.nn.functional.softmax(outputs[0], dim=0)
+                conf, idx = torch.max(probs, 0)
+                label = self.resnet_class_names[idx] if idx < len(self.resnet_class_names) else f"Class_{idx}"
+                score = conf.item() * 100
+            
+            # Detection 업데이트
+            detection['text'] = label
+            detection['success'] = True
+            detection['confidence'] = score  # ResNet 신뢰도 저장
+                    
+        except Exception as e:
+            detection['text'] = ''
+            detection['success'] = False
+    
     def analyze_frame(self):
         """프레임 분석"""
         # 로그 테이블 초기화
@@ -3656,9 +3790,28 @@ class FrameAnalysisWindow(QMainWindow):
         all_detections = detections_orig + detections_prep
         detections = self._merge_detections(all_detections)
         
-        # Dynamsoft 해독 (원본 프레임에서 먼저 시도, 실패하면 전처리 프레임에서 시도)
+        # 분석 모드에 따라 분류 또는 해독
         decoded_count = 0
-        if self.dbr_reader and len(detections) > 0:
+        if self.processing_mode == 'classify' and self.resnet_model:
+            if len(detections) > 0:
+                for det in detections:
+                    # 원본 프레임에서 먼저 시도
+                    if not det.get('success', False):
+                        self._classify_with_resnet(self.original_frame, det)
+                    # 실패하면 전처리 프레임에서 시도
+                    if not det.get('success', False):
+                        self._classify_with_resnet(processed_frame, det)
+                    
+                    if det.get('success', False):
+                        decoded_count += 1
+                    
+                    # QR 번호 부여
+                    self.qr_counter += 1
+                    det['qr_number'] = self.qr_counter
+                    
+                    # 로그에 추가
+                    self._add_log_entry(det)
+        elif self.dbr_reader and len(detections) > 0:
             for det in detections:
                 # 원본 프레임에서 먼저 시도
                 if not det.get('success', False):
@@ -3736,10 +3889,13 @@ class QRAnalysisMainWindow(QMainWindow):
         # 상태 변수
         self.yolo_model = None
         self.dbr_reader = None
+        self.resnet_model = None
+        self.resnet_class_names = ['2025', '2101', '2102', '2103', '2104', '2105']  # 기본 클래스 이름
         self.video_path = None
         self.worker = None
         self.preprocessing_options = {}
-        self.processing_mode = 'sync'  # 'sync', 'async', 또는 'webcam'
+        self.processing_mode = 'sync'  # 'sync', 'async', 'webcam'
+        self.analysis_mode = 'decode'  # 'decode' (Dynamsoft) 또는 'classify' (ResNet)
         self.webcam_window = None  # 웹캠 창 참조
         # 데이터 버퍼 (실시간 그래프용)
         self.frame_indices = deque(maxlen=500)  # 최근 500 프레임
@@ -3812,10 +3968,14 @@ class QRAnalysisMainWindow(QMainWindow):
         # 상단 컨트롤 버튼 (모델/영상 업로드만)
         control_layout = QHBoxLayout()
         
-        self.btn_load_model = QPushButton("📦 모델 업로드")
+        self.btn_load_model = QPushButton("📦 YOLO 모델")
         self.btn_load_model.setMinimumHeight(40)
         self.btn_load_model.clicked.connect(self.load_model)
-        
+
+        self.btn_load_resnet = QPushButton("🤖 ResNet 모델")
+        self.btn_load_resnet.setMinimumHeight(40)
+        self.btn_load_resnet.clicked.connect(self.load_resnet_model)
+
         self.btn_load_video = QPushButton("🎬 영상 업로드")
         self.btn_load_video.setMinimumHeight(40)
         self.btn_load_video.clicked.connect(self.load_video)
@@ -3838,6 +3998,7 @@ class QRAnalysisMainWindow(QMainWindow):
         self.btn_reset.clicked.connect(self.reset_application)
         
         control_layout.addWidget(self.btn_load_model)
+        control_layout.addWidget(self.btn_load_resnet)
         control_layout.addWidget(self.btn_load_video)
         control_layout.addWidget(self.btn_reset)
         control_layout.addStretch()
@@ -3882,22 +4043,39 @@ class QRAnalysisMainWindow(QMainWindow):
         self.btn_mode_sync = QPushButton("동기")
         self.btn_mode_sync.setCheckable(True)
         self.btn_mode_sync.setChecked(True)
-        self.btn_mode_sync.setMaximumWidth(60)
+        self.btn_mode_sync.setMinimumWidth(70)
         self.btn_mode_sync.clicked.connect(lambda: self.set_processing_mode('sync'))
         
         self.btn_mode_async = QPushButton("비동기")
         self.btn_mode_async.setCheckable(True)
-        self.btn_mode_async.setMaximumWidth(60)
+        self.btn_mode_async.setMinimumWidth(70)
         self.btn_mode_async.clicked.connect(lambda: self.set_processing_mode('async'))
         
         self.btn_mode_webcam = QPushButton("웹캠")
         self.btn_mode_webcam.setCheckable(True)
-        self.btn_mode_webcam.setMaximumWidth(60)
+        self.btn_mode_webcam.setMinimumWidth(70)
         self.btn_mode_webcam.clicked.connect(lambda: self.set_processing_mode('webcam'))
-        
+
         filter_layout.addWidget(self.btn_mode_sync)
         filter_layout.addWidget(self.btn_mode_async)
         filter_layout.addWidget(self.btn_mode_webcam)
+        
+        # 분석 모드 선택 (분류모드/해독모드)
+        filter_layout.addWidget(QLabel("  |  분석:"))
+        self.btn_analysis_classify = QPushButton("분류모드")
+        self.btn_analysis_classify.setCheckable(True)
+        self.btn_analysis_classify.setChecked(False)
+        self.btn_analysis_classify.setMinimumWidth(80)
+        self.btn_analysis_classify.clicked.connect(lambda: self.set_analysis_mode('classify'))
+        
+        self.btn_analysis_decode = QPushButton("해독모드")
+        self.btn_analysis_decode.setCheckable(True)
+        self.btn_analysis_decode.setChecked(True)
+        self.btn_analysis_decode.setMinimumWidth(80)
+        self.btn_analysis_decode.clicked.connect(lambda: self.set_analysis_mode('decode'))
+        
+        filter_layout.addWidget(self.btn_analysis_classify)
+        filter_layout.addWidget(self.btn_analysis_decode)
         filter_layout.addStretch()
         
         content_layout.addLayout(filter_layout)
@@ -4557,6 +4735,43 @@ class QRAnalysisMainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "오류", f"모델 로드 실패:\n{str(e)}")
     
+    def load_resnet_model(self):
+        """ResNet 모델 업로드"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "ResNet 모델 파일 선택", "", "PyTorch Models (*.pth *.pt)"
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            import torch
+            import torch.nn as nn
+            from torchvision import models, transforms
+            
+            device = torch.device("cpu")
+            
+            # ResNet18 모델 생성 (pretrained=False 대신 weights=None 사용)
+            classifier = models.resnet18(weights=None)
+            classifier.fc = nn.Linear(classifier.fc.in_features, len(self.resnet_class_names))
+            
+            # 모델 로드
+            classifier.load_state_dict(torch.load(file_path, map_location=device))
+            classifier.eval()
+            
+            self.resnet_model = classifier
+            self.resnet_preprocess = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+            ])
+            
+            QMessageBox.information(self, "성공", f"ResNet 모델 로드 완료!\n{os.path.basename(file_path)}\n클래스: {', '.join(self.resnet_class_names)}")
+            self._update_button_states()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "오류", f"ResNet 모델 로드 실패:\n{str(e)}")
+    
     def load_video(self):
         """영상 파일 업로드"""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -4733,6 +4948,11 @@ class QRAnalysisMainWindow(QMainWindow):
             QMessageBox.warning(self, "경고", "모델과 영상을 먼저 로드하세요.")
             return
         
+        # 분류모드 체크
+        if self.analysis_mode == 'classify' and not self.resnet_model:
+            QMessageBox.warning(self, "경고", "분류모드를 사용하려면 ResNet 모델을 먼저 로드하세요.")
+            return
+        
         # 데이터 초기화
         self.frame_indices.clear()
         self.success_history.clear()
@@ -4748,7 +4968,14 @@ class QRAnalysisMainWindow(QMainWindow):
 
         # 모드에 따라 다른 Worker 사용
         if self.processing_mode == 'async':
-            self.worker = VideoManager(self.yolo_model, self.dbr_reader)
+            # 분석 모드에 따라 모델 전달
+            if self.analysis_mode == 'classify':
+                self.worker = VideoManager(
+                    self.yolo_model, None,
+                    self.resnet_model, self.resnet_class_names, self.resnet_preprocess, 'classify'
+                )
+            else:
+                self.worker = VideoManager(self.yolo_model, self.dbr_reader, None, None, None, 'decode')
             
             # 시그널 연결
             self.worker.frame_ready.connect(self._on_frame_processed)
@@ -4771,9 +4998,16 @@ class QRAnalysisMainWindow(QMainWindow):
         else:
             self.worker = VideoProcessorWorker()
             self.worker.set_video(self.video_path)
-            self.worker.set_model(self.yolo_model, self.dbr_reader)
+            
+            # 분석 모드에 따라 모델 전달
+            if self.analysis_mode == 'classify':
+                self.worker.set_model(self.yolo_model, None, self.resnet_model, self.resnet_class_names, self.resnet_preprocess)
+            else:
+                self.worker.set_model(self.yolo_model, self.dbr_reader)
+            
             self.worker.set_preprocessing_options(self.preprocessing_options)
             self.worker.set_frame_interval(self.frame_interval_spin.value())
+            self.worker.set_processing_mode(self.analysis_mode)  # 'decode' 또는 'classify'
             
             # ROI 설정 (동기 모드)
             if self.roi_rect:
@@ -4838,6 +5072,26 @@ class QRAnalysisMainWindow(QMainWindow):
         if self.worker:
             self.worker.set_display_mode(mode)
 
+    def set_analysis_mode(self, mode: str):
+        """분석 모드 설정 (분류모드/해독모드)"""
+        if mode == 'classify':
+            if not self.resnet_model:
+                QMessageBox.warning(self, "경고", "먼저 ResNet 모델을 로드하세요.")
+                self.btn_analysis_classify.setChecked(False)
+                self.btn_analysis_decode.setChecked(True)
+                return
+            self.analysis_mode = 'classify'
+            self.btn_analysis_classify.setChecked(True)
+            self.btn_analysis_decode.setChecked(False)
+            QMessageBox.information(self, "분류모드", "분류모드로 변경되었습니다.\nYOLO로 탐지한 QR 코드를 ResNet 모델로 분류합니다.")
+        else:
+            self.analysis_mode = 'decode'
+            self.btn_analysis_classify.setChecked(False)
+            self.btn_analysis_decode.setChecked(True)
+            QMessageBox.information(self, "해독모드", "해독모드로 변경되었습니다.\nYOLO로 탐지한 QR 코드를 Dynamsoft로 해독합니다.")
+        
+        self._update_button_states()
+    
     def set_processing_mode(self, mode: str):
         """처리 모드 설정"""
         # 웹캠 모드인 경우 새로운 창 열기
@@ -4872,17 +5126,7 @@ class QRAnalysisMainWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         
-        if reply == QMessageBox.StandardButton.Yes:
-            self.processing_mode = mode
-            if mode == 'sync':
-                self.btn_mode_sync.setChecked(True)
-                self.btn_mode_async.setChecked(False)
-                self.btn_mode_webcam.setChecked(False)
-            else:
-                self.btn_mode_sync.setChecked(False)
-                self.btn_mode_async.setChecked(True)
-                self.btn_mode_webcam.setChecked(False)
-        else:
+        if reply != QMessageBox.StandardButton.Yes:
             # 변경 취소 - 이전 모드로 버튼 상태 복원
             if self.processing_mode == 'sync':
                 self.btn_mode_sync.setChecked(True)
@@ -4892,6 +5136,22 @@ class QRAnalysisMainWindow(QMainWindow):
                 self.btn_mode_sync.setChecked(False)
                 self.btn_mode_async.setChecked(True)
                 self.btn_mode_webcam.setChecked(False)
+            return
+        
+        # 모드 변경 실행
+        self.processing_mode = mode
+        if mode == 'sync':
+            self.btn_mode_sync.setChecked(True)
+            self.btn_mode_async.setChecked(False)
+            self.btn_mode_webcam.setChecked(False)
+        elif mode == 'async':
+            self.btn_mode_sync.setChecked(False)
+            self.btn_mode_async.setChecked(True)
+            self.btn_mode_webcam.setChecked(False)
+        elif mode == 'webcam':
+            self.btn_mode_sync.setChecked(False)
+            self.btn_mode_async.setChecked(False)
+            self.btn_mode_webcam.setChecked(True)
     
     def _open_webcam_window(self):
         """웹캠 모드 창 열기"""
@@ -4907,8 +5167,14 @@ class QRAnalysisMainWindow(QMainWindow):
             self.btn_mode_webcam.setChecked(False)
             return
         
-        # 웹캠 창 생성 및 표시
-        self.webcam_window = WebcamWindow(self.yolo_model, self.dbr_reader)
+        # 웹캠 창 생성 및 표시 (분석 모드에 따라 모델 전달)
+        if self.analysis_mode == 'classify' and self.resnet_model:
+            self.webcam_window = WebcamWindow(
+                self.yolo_model, None,
+                self.resnet_model, self.resnet_class_names, self.resnet_preprocess
+            )
+        else:
+            self.webcam_window = WebcamWindow(self.yolo_model, self.dbr_reader)
         self.webcam_window.parent_window = self  # 참조 저장
         self.webcam_window.show()
         # 웹캠 모드는 별도 창이므로 버튼 체크 해제
@@ -5202,8 +5468,14 @@ class QRAnalysisMainWindow(QMainWindow):
             QMessageBox.warning(self, "오류", f"프레임 {frame_no}를 읽을 수 없습니다.")
             return
         
-        # FrameAnalysisWindow 열기
-        analysis_window = FrameAnalysisWindow(frame, self.yolo_model, self.dbr_reader, self)
+        # FrameAnalysisWindow 열기 (분석 모드에 따라 모델 전달)
+        if self.analysis_mode == 'classify' and self.resnet_model:
+            analysis_window = FrameAnalysisWindow(
+                frame, self.yolo_model, None, 
+                self.resnet_model, self.resnet_class_names, self.resnet_preprocess, self
+            )
+        else:
+            analysis_window = FrameAnalysisWindow(frame, self.yolo_model, self.dbr_reader, None, None, None, self)
         analysis_window.show()
     
     # ============================================================================
@@ -5386,6 +5658,8 @@ class QRAnalysisMainWindow(QMainWindow):
             
             # 모델 및 영상 경로 초기화
             self.yolo_model = None
+            self.dbr_reader = None
+            self.resnet_model = None
             self.video_path = None
             self.preprocessing_options = {}
             
@@ -5450,7 +5724,11 @@ class QRAnalysisMainWindow(QMainWindow):
     
     def _update_button_states(self):
         """버튼 상태 업데이트"""
-        can_start = self.yolo_model is not None and self.video_path is not None
+        # 분류모드인 경우 ResNet 모델도 필요
+        if self.analysis_mode == 'classify':
+            can_start = self.yolo_model is not None and self.resnet_model is not None and self.video_path is not None
+        else:
+            can_start = self.yolo_model is not None and self.video_path is not None
         self.btn_start.setEnabled(can_start)
 
 

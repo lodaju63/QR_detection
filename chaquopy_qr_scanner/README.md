@@ -64,3 +64,4 @@ python {
 - [Chaquopy 문서](https://chaquo.com/chaquopy/doc/current/)
 - [CameraX 가이드](https://developer.android.com/training/camerax)
 - [Dynamsoft Android SDK](https://www.dynamsoft.com/barcode-reader/docs/mobile/programming/android/user-guide.html)
+

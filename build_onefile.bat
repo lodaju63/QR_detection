@@ -41,3 +41,4 @@ if exist "dist\QR_Analyzer.exe" (
 pause
 
 
+

@@ -46,3 +46,4 @@ val result = qrUtils.callAttr("decode_qr_opencv", imageArray)
 - **Python 코드**: `qr_utils.py` (보조 기능, Kotlin에서 호출)
 
 Python은 보조적으로 사용되며, 메인 로직은 Kotlin에 있습니다.
+

@@ -93,3 +93,4 @@ def extract_roi(image_array, x, y, width, height):
     except Exception as e:
         print(f"ROI extraction error: {e}")
         return image_array
+
