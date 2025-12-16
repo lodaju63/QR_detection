@@ -2068,63 +2068,74 @@ class WebcamAIWorker(QThread):
 
             results = []
             
+            # 원본 프레임 저장 (ResNet/Dynamsoft 분류 시 사용)
+            original_frame = frame.copy()
+            
             # ROI 적용 (ROI가 설정되어 있으면 프레임 크롭)
             roi_offset_x = 0
             roi_offset_y = 0
+            cropped_frame = frame
             if self.roi_rect:
                 x1, y1, x2, y2 = self.roi_rect
                 h, w = frame.shape[:2]
-                # 경계 체크
-                x1 = max(0, min(x1, w))
-                y1 = max(0, min(y1, h))
+                # 경계 체크 (원본 프레임 경계 내에서)
+                x1 = max(0, min(x1, w - 1))
+                y1 = max(0, min(y1, h - 1))
                 x2 = max(x1 + 1, min(x2, w))
                 y2 = max(y1 + 1, min(y2, h))
                 roi_offset_x = x1
                 roi_offset_y = y1
-                frame = frame[y1:y2, x1:x2]
-                if frame.size == 0:
+                # ROI 영역 크롭 (경계 포함)
+                cropped_frame = frame[y1:y2, x1:x2]
+                if cropped_frame.size == 0:
                     continue  # 유효하지 않은 ROI
 
-            # YOLO 탐지
+            # YOLO 탐지 (크롭된 프레임에서)
             detections = []
             if self.yolo_model is not None:
                 try:
-                    yolo_results = self.yolo_model(frame, conf=self.conf_threshold, verbose=False)
+                    yolo_results = self.yolo_model(cropped_frame, conf=self.conf_threshold, verbose=False)
                     result = yolo_results[0]
                     
                     if result.boxes is not None and len(result.boxes) > 0:
-                        h, w = frame.shape[:2]
+                        h, w = cropped_frame.shape[:2]
                         for box in result.boxes:
                             conf = float(box.conf[0])
                             xyxy = box.xyxy[0].cpu().numpy()
                             x1, y1, x2, y2 = map(int, xyxy)
                             
+                            # 평소처럼 pad 추가 (ROI 모드와 일반 모드 동일)
                             pad = 20
-                            x1 = max(0, x1 - pad)
-                            y1 = max(0, y1 - pad)
-                            x2 = min(w, x2 + pad)
-                            y2 = min(h, y2 + pad)
+                            # 크롭된 프레임 내에서 pad 추가 (경계를 넘지 않도록)
+                            x1_padded = max(0, x1 - pad)
+                            y1_padded = max(0, y1 - pad)
+                            x2_padded = min(w, x2 + pad)
+                            y2_padded = min(h, y2 + pad)
                             
-                            detections.append({
-                                'bbox': [x1, y1, x2, y2],
-                                'confidence': conf
-                            })
+                            # 유효한 탐지 박스인지 확인 (크롭된 프레임 경계 내에 있고, 최소 크기 이상)
+                            if (x1_padded >= 0 and y1_padded >= 0 and 
+                                x2_padded <= w and y2_padded <= h and 
+                                x2_padded > x1_padded and y2_padded > y1_padded):
+                                detections.append({
+                                    'bbox': [x1_padded, y1_padded, x2_padded, y2_padded],
+                                    'confidence': conf
+                                })
                 except Exception as e:
                     pass
-            
-            # ROI가 있으면 탐지 결과 좌표를 원본 프레임 좌표로 변환
-            if self.roi_rect:
-                for det in detections:
-                    if 'bbox' in det:
-                        x1, y1, x2, y2 = det['bbox']
-                        det['bbox'] = [x1 + roi_offset_x, y1 + roi_offset_y, 
-                                      x2 + roi_offset_x, y2 + roi_offset_y]
             
             # ResNet 모드인 경우 ResNet 분류, 아니면 Dynamsoft 해독
             if self.webcam_mode == 'resnet' and self.resnet_model is not None and len(detections) > 0:
                 for det in detections:
-                    x1, y1, x2, y2 = det['bbox']
-                    roi = frame[y1:y2, x1:x2]
+                    # ROI 내부 좌표
+                    x1_local, y1_local, x2_local, y2_local = det['bbox']
+                    # 원본 프레임 좌표로 변환
+                    x1 = x1_local + roi_offset_x
+                    y1 = y1_local + roi_offset_y
+                    x2 = x2_local + roi_offset_x
+                    y2 = y2_local + roi_offset_y
+                    
+                    # 원본 프레임에서 ROI 추출
+                    roi = original_frame[y1:y2, x1:x2]
                     
                     if roi.size == 0:
                         continue
@@ -2158,11 +2169,19 @@ class WebcamAIWorker(QThread):
                         
                         results.append([x1, y1, x2, y2, str(label), confidence_score])
                     except Exception as e:
-                        results.append([x1, y1, x2, y2, ""])
+                        results.append([x1, y1, x2, y2, "", 0.0])
             elif self.dbr_reader is not None and len(detections) > 0:
                 for det in detections:
-                    x1, y1, x2, y2 = det['bbox']
-                    roi = frame[y1:y2, x1:x2]
+                    # ROI 내부 좌표
+                    x1_local, y1_local, x2_local, y2_local = det['bbox']
+                    # 원본 프레임 좌표로 변환
+                    x1 = x1_local + roi_offset_x
+                    y1 = y1_local + roi_offset_y
+                    x2 = x2_local + roi_offset_x
+                    y2 = y2_local + roi_offset_y
+                    
+                    # 원본 프레임에서 ROI 추출
+                    roi = original_frame[y1:y2, x1:x2]
                     
                     if roi.size == 0:
                         continue
@@ -2377,6 +2396,8 @@ class WebcamWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("웹캠 QR 분석")
         self.resize(1280, 900)
+        # 창 크기 조정 가능하도록 설정 (기본값은 1280x900이지만 사용자가 조정 가능)
+        self.setMinimumSize(800, 600)  # 최소 크기 설정
         
         # 모델 저장
         self.yolo_model = yolo_model
@@ -2395,6 +2416,13 @@ class WebcamWindow(QMainWindow):
         self.ai_worker = None
         self.player = None
         self.frame_queue = queue.Queue(maxsize=1)
+        
+        # ROI 관련 변수
+        self.roi_mode = False
+        self.roi_rect = None  # (x1, y1, x2, y2)
+        
+        # 좌표 변환을 위한 실제 프레임 크기 저장
+        self.actual_frame_size = None  # (height, width) - 원본 영상 해상도
 
         # UI 구성 - 전체를 스크롤 가능하게 만들기
         scroll_area = QScrollArea()
@@ -2408,13 +2436,15 @@ class WebcamWindow(QMainWindow):
         
         self.layout = QVBoxLayout(self.central_widget)
 
-        # 비디오 레이블
-        self.video_label = QLabel("웹캠 연결 중...")
+        # 비디오 레이블 (ROI 지원)
+        self.video_label = ROIVideoLabel()
+        self.video_label.setText("웹캠 연결 중...")
         self.video_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.video_label.setMinimumSize(640, 480)
         self.video_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.video_label.setStyleSheet("QLabel { background-color: black; }")
-        self.layout.addWidget(self.video_label, 0)  # stretch factor 0으로 설정
+        self.video_label.roi_changed.connect(self.on_roi_changed)
+        self.layout.addWidget(self.video_label, 1)  # stretch factor 1로 설정하여 확장 가능하게
 
         # 카메라 소스 설정 섹션
         camera_group = QGroupBox("📹 카메라 설정")
@@ -2429,6 +2459,15 @@ class WebcamWindow(QMainWindow):
         self.btn_connect_camera = QPushButton("연결")
         self.btn_connect_camera.clicked.connect(self._reconnect_camera)
         camera_layout.addWidget(self.btn_connect_camera)
+        
+        camera_layout.addStretch()
+        
+        # ROI 모드 토글 버튼
+        self.btn_roi_mode = QPushButton("🎯 ROI 모드")
+        self.btn_roi_mode.setCheckable(True)
+        self.btn_roi_mode.setChecked(False)
+        self.btn_roi_mode.clicked.connect(self.toggle_roi_mode)
+        camera_layout.addWidget(self.btn_roi_mode)
         
         self.layout.addWidget(camera_group)
 
@@ -2522,6 +2561,10 @@ class WebcamWindow(QMainWindow):
         self.ai_worker.result_ready.connect(self.on_ai_result)
         # 플레이어에도 결과 전달 (시각화용)
         self.ai_worker.result_ready.connect(self.player.update_ai_results)
+        
+        # ROI 설정 (이미 ROI가 있으면 전달)
+        if self.roi_rect and self.ai_worker:
+            self.ai_worker.set_roi(self.roi_rect)
         
         # 시작
         self.ai_worker.start()
@@ -2907,6 +2950,49 @@ class WebcamWindow(QMainWindow):
                 else:
                     self._add_log_entry(self.frame_counter, "인식 실패", "❌ 실패", 0.0)
     
+    def toggle_roi_mode(self):
+        """ROI 모드 토글"""
+        self.roi_mode = self.btn_roi_mode.isChecked()
+        self.video_label.set_roi_mode(self.roi_mode)
+        
+        if not self.roi_mode:
+            # ROI 모드 비활성화 시 ROI 초기화
+            self.roi_rect = None
+            self.video_label.clear_roi()
+            # AI worker에 ROI 초기화 알림
+            if self.ai_worker:
+                self.ai_worker.set_roi(None)
+        else:
+            # ROI 모드 활성화 시 안내 메시지
+            QMessageBox.information(
+                self,
+                "ROI 모드 활성화",
+                "웹캠 화면에서 마우스로 드래그하여 관심 영역(ROI)을 그려주세요.\n"
+                "ROI가 설정되면 해당 영역만 집중적으로 탐지/분류합니다."
+            )
+    
+    def on_roi_changed(self, x1: int, y1: int, x2: int, y2: int):
+        """ROI 영역 변경 시 호출 (화면 좌표를 실제 프레임 좌표로 변환)"""
+        # ROIVideoLabel._emit_roi_in_frame_coords()에서 이미 변환된 좌표를 받음
+        # 하지만 추가 검증을 위해 실제 프레임 크기와 비교
+        
+        # 실제 프레임 크기가 설정되어 있으면 경계 체크
+        if self.actual_frame_size:
+            actual_h, actual_w = self.actual_frame_size
+            
+            # 경계 체크 및 클리핑
+            x1 = max(0, min(x1, actual_w - 1))
+            y1 = max(0, min(y1, actual_h - 1))
+            x2 = max(x1 + 1, min(x2, actual_w))
+            y2 = max(y1 + 1, min(y2, actual_h))
+        
+        # 실행 중이어도 ROI 좌표를 실시간으로 갱신
+        # AI Worker는 다음 프레임을 처리할 때 바뀐 좌표를 가져다 쓰면 됩니다.
+        self.roi_rect = (x1, y1, x2, y2)
+        # AI worker에 ROI 업데이트 알림 (실시간 반영)
+        if self.ai_worker:
+            self.ai_worker.set_roi(self.roi_rect)
+    
     def set_log_filter(self, mode: str):
         """로그 필터 설정"""
         self.log_filter_mode = mode
@@ -3059,6 +3145,13 @@ class WebcamWindow(QMainWindow):
         h, w, ch = rgb_image.shape
         bytes_per_line = ch * w
         convert_to_Qt_format = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+        
+        # 실제 프레임 크기 저장 (좌표 변환을 위해 필수!)
+        self.actual_frame_size = (h, w)  # (height, width)
+        
+        # ROIVideoLabel인 경우 실제 프레임 크기 설정 (좌표 변환을 위해 필수!)
+        if isinstance(self.video_label, ROIVideoLabel):
+            self.video_label.set_actual_frame_size(h, w)  # 실제 프레임 크기 (원본 해상도)
         
         label_width = self.video_label.width()
         label_height = self.video_label.height()
