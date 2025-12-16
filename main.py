@@ -4705,10 +4705,21 @@ class QRAnalysisMainWindow(QMainWindow):
                     if bundle_dir not in sys.path:
                         sys.path.insert(0, bundle_dir)
                 
+                # OpenCV setNumThreads 호환성 체크 및 설정
+                try:
+                    if hasattr(cv2, 'setNumThreads'):
+                        cv2.setNumThreads(0)  # 멀티스레딩 비활성화 (ultralytics와의 충돌 방지)
+                except:
+                    pass
+                
                 from ultralytics import YOLO
                 YOLO_AVAILABLE = True
             except Exception as e:
-                QMessageBox.critical(self, "오류", f"ultralytics를 로드할 수 없습니다:\n{str(e)}\n\nPyTorch CPU 버전을 설치하세요:\npip install torch torchvision --index-url https://download.pytorch.org/whl/cpu")
+                error_msg = str(e)
+                if 'setNumThreads' in error_msg:
+                    QMessageBox.critical(self, "오류", f"OpenCV 버전 호환성 문제입니다.\n\n오류: {error_msg}\n\n해결 방법:\npip install --upgrade opencv-python")
+                else:
+                    QMessageBox.critical(self, "오류", f"ultralytics를 로드할 수 없습니다:\n{error_msg}\n\nPyTorch CPU 버전을 설치하세요:\npip install torch torchvision --index-url https://download.pytorch.org/whl/cpu")
                 return
             
             self.yolo_model = YOLO(file_path)
@@ -4751,12 +4762,88 @@ class QRAnalysisMainWindow(QMainWindow):
             
             device = torch.device("cpu")
             
-            # ResNet18 모델 생성 (pretrained=False 대신 weights=None 사용)
+            # 먼저 체크포인트를 로드해서 클래스 개수 및 클래스 이름 확인
+            checkpoint = torch.load(file_path, map_location=device)
+            
+            # 체크포인트에서 클래스 이름 찾기
+            class_names_from_model = None
+            if isinstance(checkpoint, dict):
+                # 다양한 키 이름으로 클래스 이름 찾기
+                if 'class_names' in checkpoint:
+                    class_names_from_model = checkpoint['class_names']
+                elif 'classes' in checkpoint:
+                    class_names_from_model = checkpoint['classes']
+                elif 'labels' in checkpoint:
+                    class_names_from_model = checkpoint['labels']
+                elif 'CLASS_NAMES' in checkpoint:
+                    class_names_from_model = checkpoint['CLASS_NAMES']
+            
+            # state_dict에서 fc 레이어의 출력 크기 확인
+            num_classes = None
+            if isinstance(checkpoint, dict):
+                if 'fc.weight' in checkpoint:
+                    num_classes = checkpoint['fc.weight'].shape[0]
+                elif 'state_dict' in checkpoint:
+                    if 'fc.weight' in checkpoint['state_dict']:
+                        num_classes = checkpoint['state_dict']['fc.weight'].shape[0]
+                elif 'model' in checkpoint:
+                    if 'fc.weight' in checkpoint['model']:
+                        num_classes = checkpoint['model']['fc.weight'].shape[0]
+            else:
+                # checkpoint가 state_dict 자체인 경우
+                if 'fc.weight' in checkpoint:
+                    num_classes = checkpoint['fc.weight'].shape[0]
+            
+            if num_classes is None:
+                # 클래스 개수를 찾을 수 없으면 기본값 사용
+                num_classes = len(self.resnet_class_names)
+                QMessageBox.warning(self, "경고", f"모델에서 클래스 개수를 자동으로 감지할 수 없습니다.\n기본값 {num_classes}개를 사용합니다.")
+            else:
+                # 클래스 이름 처리
+                if class_names_from_model is not None:
+                    # 모델에서 클래스 이름을 찾은 경우
+                    if isinstance(class_names_from_model, (list, tuple)) and len(class_names_from_model) == num_classes:
+                        self.resnet_class_names = list(class_names_from_model)
+                    else:
+                        # 클래스 이름 형식이 맞지 않으면 사용자에게 입력받기
+                        class_names_from_model = None
+                
+                if class_names_from_model is None:
+                    # 모델에 클래스 이름이 없거나 형식이 맞지 않으면 사용자에게 입력받기
+                    text, ok = QInputDialog.getText(
+                        self, 
+                        "클래스 이름 입력", 
+                        f"모델에 클래스 이름이 저장되어 있지 않습니다.\n\n{num_classes}개 클래스의 이름을 쉼표(,)로 구분하여 입력하세요:\n예: 2025,2101,2102,2103",
+                        text=",".join(self.resnet_class_names[:num_classes]) if len(self.resnet_class_names) >= num_classes else ",".join([f"Class_{i}" for i in range(num_classes)])
+                    )
+                    
+                    if ok and text.strip():
+                        # 사용자 입력 파싱
+                        input_names = [name.strip() for name in text.split(',') if name.strip()]
+                        if len(input_names) == num_classes:
+                            self.resnet_class_names = input_names
+                        else:
+                            QMessageBox.warning(self, "경고", f"입력한 클래스 개수({len(input_names)})가 모델의 클래스 개수({num_classes})와 일치하지 않습니다.\n기본 이름을 사용합니다.")
+                            self.resnet_class_names = input_names[:num_classes] if len(input_names) > num_classes else input_names + [f"Class_{i}" for i in range(len(input_names), num_classes)]
+                    else:
+                        # 사용자가 취소하거나 빈 입력을 한 경우
+                        if num_classes <= len(self.resnet_class_names):
+                            self.resnet_class_names = self.resnet_class_names[:num_classes]
+                        else:
+                            self.resnet_class_names = self.resnet_class_names + [f"Class_{i}" for i in range(len(self.resnet_class_names), num_classes)]
+            
+            # ResNet18 모델 생성 (클래스 개수에 맞게)
             classifier = models.resnet18(weights=None)
-            classifier.fc = nn.Linear(classifier.fc.in_features, len(self.resnet_class_names))
+            classifier.fc = nn.Linear(classifier.fc.in_features, num_classes)
             
             # 모델 로드
-            classifier.load_state_dict(torch.load(file_path, map_location=device))
+            if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+                classifier.load_state_dict(checkpoint['state_dict'])
+            elif isinstance(checkpoint, dict) and 'model' in checkpoint:
+                classifier.load_state_dict(checkpoint['model'])
+            else:
+                classifier.load_state_dict(checkpoint)
+            
             classifier.eval()
             
             self.resnet_model = classifier
@@ -4766,7 +4853,7 @@ class QRAnalysisMainWindow(QMainWindow):
                 transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
             ])
             
-            QMessageBox.information(self, "성공", f"ResNet 모델 로드 완료!\n{os.path.basename(file_path)}\n클래스: {', '.join(self.resnet_class_names)}")
+            QMessageBox.information(self, "성공", f"ResNet 모델 로드 완료!\n{os.path.basename(file_path)}\n클래스 개수: {num_classes}\n클래스: {', '.join(self.resnet_class_names)}")
             self._update_button_states()
             
         except Exception as e:
