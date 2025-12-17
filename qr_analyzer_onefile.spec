@@ -15,6 +15,14 @@ try:
 except:
     pass
 
+# Get torch binary files
+torch_path = None
+try:
+    import torch
+    torch_path = Path(torch.__file__).parent
+except:
+    pass
+
 # Get dynamsoft data files
 dynamsoft_path = None
 try:
@@ -22,6 +30,17 @@ try:
     dynamsoft_path = Path(dynamsoft_barcode_reader_bundle.__file__).parent
 except:
     pass
+
+# Collect binaries (DLL files)
+binaries = []
+if torch_path:
+    # PyTorch DLL files
+    torch_lib = torch_path / 'lib'
+    if torch_lib.exists():
+        for dll_file in torch_lib.glob('*.dll'):
+            binaries.append((str(dll_file), '.'))
+        for dll_file in torch_lib.glob('*.pyd'):
+            binaries.append((str(dll_file), '.'))
 
 # Collect datas
 datas = []
@@ -55,7 +74,7 @@ if dynamsoft_path:
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=[
         'PyQt6.QtCore',
