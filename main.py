@@ -382,6 +382,10 @@ def apply_morphology(image: np.ndarray, operation: str = 'closing', kernel_size:
         return cv2.cvtColor(result, cv2.COLOR_GRAY2BGR)
     return result
 
+def apply_inverted(image: np.ndarray) -> np.ndarray:
+    """이미지 색상 반전 (Inverted)"""
+    return cv2.bitwise_not(image)
+
 
 # ============================================================================
 # 전처리 옵션 다이얼로그
@@ -412,6 +416,7 @@ class PreprocessingDialog(QDialog):
                 'use_morphology': False,
                 'morphology_operation': 'closing',
                 'morphology_kernel_size': 5,
+                'use_inverted': False,
             }
         
         self.init_ui()
@@ -490,7 +495,17 @@ class PreprocessingDialog(QDialog):
         line2.setFrameShape(QFrame.Shape.HLine)
         form.addRow(line2)
         
-        # 3. 이진화
+        # 3. 색상 반전
+        self.inverted_check = QCheckBox("색상 반전 (Inverted)")
+        self.inverted_check.setChecked(self.options.get('use_inverted', False))
+        form.addRow("", self.inverted_check)
+        
+        # 구분선
+        line2_5 = QFrame()
+        line2_5.setFrameShape(QFrame.Shape.HLine)
+        form.addRow(line2_5)
+        
+        # 4. 이진화
         self.threshold_check = QCheckBox("적응형 이진화")
         self.threshold_check.setChecked(self.options.get('use_threshold', False))
         
@@ -610,6 +625,7 @@ class PreprocessingDialog(QDialog):
             'use_denoise': self.denoise_check.isChecked(),
             'denoise_method': self.denoise_method.currentText(),
             'denoise_strength': self.denoise_strength.value(),
+            'use_inverted': self.inverted_check.isChecked(),
             'use_threshold': self.threshold_check.isChecked(),
             'threshold_block_size': block_val,
             'threshold_c': self.threshold_c.value(),
@@ -716,36 +732,74 @@ class AnalysisWorker(QThread):
                     else:
                         roi_scale_factor = 1.0
                     
-                # 1. 전처리
-                processed_frame = self._apply_preprocessing(frame)
-
-                # 2. YOLO 탐지 (듀얼 패스: 원본 + 전처리)
-                detections_orig = self._detect_qr_codes(frame)  # 크롭된 원본 프레임으로 탐지
-                detections_prep = self._detect_qr_codes(processed_frame)  # 크롭된 전처리 프레임으로 탐지
+                # 1. 전처리 옵션 수집 및 각 전처리별 프레임 생성
+                preprocessing_frames = self._create_preprocessing_variants(frame)
+                
+                # inverted가 활성화되어 있으면 원본과 inverted 둘 다에서 탐지 및 해독
+                use_inverted = self.preprocessing_options.get('use_inverted', False)
+                
+                # 2. YOLO 탐지 (원본 + 모든 전처리 변형)
+                all_detections = []
+                # 원본 프레임에서 탐지
+                orig_detections = self._detect_qr_codes(frame)
+                for det in orig_detections:
+                    det['source_frame'] = '원본'  # 탐지 출처 기록
+                all_detections.extend(orig_detections)
+                
+                # 각 전처리 변형에서 탐지
+                for prep_name, prep_frame in preprocessing_frames.items():
+                    prep_detections = self._detect_qr_codes(prep_frame)
+                    for det in prep_detections:
+                        det['source_frame'] = prep_name  # 탐지 출처 기록
+                    all_detections.extend(prep_detections)
+                
+                # inverted가 활성화되어 있으면 inverted 프레임에서도 별도로 탐지
+                if use_inverted:
+                    inverted_frame = apply_inverted(frame.copy())
+                    inv_detections = self._detect_qr_codes(inverted_frame)
+                    for det in inv_detections:
+                        det['source_frame'] = '색상반전'  # 탐지 출처 기록
+                    all_detections.extend(inv_detections)
                 
                 # 3. 결과 합치기 및 중복 제거
-                all_detections = detections_orig + detections_prep
                 detections = self._merge_detections(all_detections)
 
-                # 4. 해독 또는 분류 (크롭된 프레임 좌표로 수행)
+                # 4. 해독 또는 분류
+                # 각 탐지된 QR에 대해 원본과 inverted 둘 다에서 해독 시도 (inverted 활성화 시)
                 if self.processing_mode == 'classify' and self.resnet_model:
                     # ResNet 분류 모드
                     for det in detections:
-                        # 원본 프레임에서 먼저 시도
+                        # 원본 프레임에서 시도
                         if not det.get('success', False):
-                            self._classify_with_resnet(frame, det)
-                        # 실패하면 전처리 프레임에서 시도
-                        if not det.get('success', False):
-                            self._classify_with_resnet(processed_frame, det)
+                            self._classify_with_resnet(frame, det, '원본')
+                        
+                        # inverted가 활성화되어 있으면 inverted 프레임에서도 시도
+                        if use_inverted:
+                            inverted_frame = apply_inverted(frame.copy())
+                            if not det.get('success', False):
+                                self._classify_with_resnet(inverted_frame, det, '색상반전')
+                        
+                        # 각 전처리 변형에서 시도
+                        for prep_name, prep_frame in preprocessing_frames.items():
+                            if not det.get('success', False):
+                                self._classify_with_resnet(prep_frame, det, prep_name)
                 else:
                     # Dynamsoft 해독 모드
                     for det in detections:
-                        # 원본 프레임에서 먼저 시도
+                        # 원본 프레임에서 시도
                         if not det.get('success', False):
-                            self._decode_qr_code(frame, det)
-                        # 실패하면 전처리 프레임에서 시도
-                        if not det.get('success', False):
-                            self._decode_qr_code(processed_frame, det)
+                            self._decode_qr_code(frame, det, '원본')
+                        
+                        # inverted가 활성화되어 있으면 inverted 프레임에서도 시도
+                        if use_inverted:
+                            inverted_frame = apply_inverted(frame.copy())
+                            if not det.get('success', False):
+                                self._decode_qr_code(inverted_frame, det, '색상반전')
+                        
+                        # 각 전처리 변형에서 시도
+                        for prep_name, prep_frame in preprocessing_frames.items():
+                            if not det.get('success', False):
+                                self._decode_qr_code(prep_frame, det, prep_name)
                 
                 # ROI가 있으면 탐지 결과 좌표를 원본 프레임 좌표로 변환 (해독 후 변환)
                 if self.roi_rect:
@@ -779,8 +833,8 @@ class AnalysisWorker(QThread):
                                 quad.append([px + roi_offset_x, py + roi_offset_y])
                             det['quad'] = quad
 
-                # 4. 분석 지표 계산
-                metrics = self._calculate_metrics(processed_frame, detections)
+                # 4. 분석 지표 계산 (원본 프레임 사용)
+                metrics = self._calculate_metrics(frame, detections)
                 metrics['frame_idx'] = frame_idx
                 metrics['frame_no'] = frame_idx
                 metrics['total_frames'] = total_frames
@@ -818,6 +872,10 @@ class AnalysisWorker(QThread):
             elif method == 'median':
                 result = apply_median_blur(result, strength)
         
+        # 색상 반전
+        if opts.get('use_inverted', False):
+            result = apply_inverted(result)
+        
         # 이진화
         if opts.get('use_threshold', False):
             result = apply_adaptive_threshold(result, opts.get('threshold_block_size', 11), opts.get('threshold_c', 2))
@@ -827,6 +885,84 @@ class AnalysisWorker(QThread):
             result = apply_morphology(result, opts.get('morphology_operation', 'closing'), opts.get('morphology_kernel_size', 5))
         
         return result
+    
+    def _create_preprocessing_variants(self, frame: np.ndarray) -> dict:
+        """각 전처리 옵션을 개별적으로 적용한 프레임들과 모든 조합 생성
+        단, inverted는 특별 처리: inverted 없이 적용한 결과와 inverted 포함한 결과를 모두 생성"""
+        variants = {}
+        opts = self.preprocessing_options
+        
+        if not opts:
+            return variants
+        
+        import itertools
+        
+        # inverted 제외한 전처리 옵션 수집
+        active_preps_no_inv = []
+        prep_functions = {}
+        
+        if opts.get('use_clahe', False):
+            active_preps_no_inv.append('CLAHE')
+            prep_functions['CLAHE'] = lambda f: apply_clahe(f, opts.get('clahe_clip_limit', 2.0), opts.get('clahe_tile_size', 8))
+        
+        if opts.get('use_denoise', False):
+            method = opts.get('denoise_method', 'bilateral')
+            strength = opts.get('denoise_strength', 9)
+            prep_name = f'노이즈제거({method})'
+            active_preps_no_inv.append(prep_name)
+            if method == 'bilateral':
+                prep_functions[prep_name] = lambda f: apply_bilateral_filter(f, strength, 75, 75)
+            elif method == 'gaussian':
+                prep_functions[prep_name] = lambda f: apply_gaussian_blur(f, strength)
+            elif method == 'median':
+                prep_functions[prep_name] = lambda f: apply_median_blur(f, strength)
+        
+        if opts.get('use_threshold', False):
+            active_preps_no_inv.append('이진화')
+            prep_functions['이진화'] = lambda f: apply_adaptive_threshold(f, opts.get('threshold_block_size', 11), opts.get('threshold_c', 2))
+        
+        if opts.get('use_morphology', False):
+            active_preps_no_inv.append('형태학적연산')
+            prep_functions['형태학적연산'] = lambda f: apply_morphology(f, opts.get('morphology_operation', 'closing'), opts.get('morphology_kernel_size', 5))
+        
+        use_inverted = opts.get('use_inverted', False)
+        
+        # 1. inverted 없이 적용한 전처리 변형들 생성
+        # 각 전처리를 개별적으로 적용
+        for prep_name in active_preps_no_inv:
+            variants[prep_name] = prep_functions[prep_name](frame.copy())
+        
+        # inverted 없이 모든 조합 생성 (2개 이상)
+        for r in range(2, len(active_preps_no_inv) + 1):
+            for combo in itertools.combinations(active_preps_no_inv, r):
+                combo_name = '+'.join(combo)
+                result = frame.copy()
+                for prep_name in combo:
+                    result = prep_functions[prep_name](result)
+                variants[combo_name] = result
+        
+        # 2. inverted가 활성화되어 있으면 inverted 포함한 변형들도 생성
+        if use_inverted:
+            # inverted만 적용
+            variants['색상반전'] = apply_inverted(frame.copy())
+            
+            # inverted + 각 전처리 조합
+            for prep_name in active_preps_no_inv:
+                combo_name = f'색상반전+{prep_name}'
+                result = apply_inverted(frame.copy())
+                result = prep_functions[prep_name](result)
+                variants[combo_name] = result
+            
+            # inverted + 여러 전처리 조합 (2개 이상)
+            for r in range(2, len(active_preps_no_inv) + 1):
+                for combo in itertools.combinations(active_preps_no_inv, r):
+                    combo_name = '색상반전+' + '+'.join(combo)
+                    result = apply_inverted(frame.copy())
+                    for prep_name in combo:
+                        result = prep_functions[prep_name](result)
+                    variants[combo_name] = result
+        
+        return variants
     
     def _detect_qr_codes(self, frame: np.ndarray) -> List[Dict]:
         """YOLO로 QR 코드 탐지"""
@@ -906,7 +1042,7 @@ class AnalysisWorker(QThread):
         
         return merged
     
-    def _decode_qr_code(self, frame: np.ndarray, detection: Dict):
+    def _decode_qr_code(self, frame: np.ndarray, detection: Dict, preprocessing_method: str = '원본'):
         """Dynamsoft로 QR 코드 해독"""
         if self.dbr_reader is None:
             return
@@ -974,16 +1110,20 @@ class AnalysisWorker(QThread):
                     pass
                 
                 # Detection 업데이트
-                detection['text'] = text or ''
-                detection['quad'] = quad_xy
-                detection['success'] = len(detection['text']) > 0
+                if len(text or '') > 0:
+                    detection['text'] = text or ''
+                    detection['quad'] = quad_xy
+                    detection['success'] = True
+                    # 전처리 방식 저장 (성공한 경우에만)
+                    if 'preprocessing_methods' not in detection:
+                        detection['preprocessing_methods'] = []
+                    detection['preprocessing_methods'].append(preprocessing_method)
             else:
-                detection['text'] = ''
-                detection['success'] = False
+                # 실패해도 전처리 방식은 기록하지 않음 (성공한 경우만 기록)
+                pass
                     
         except Exception as e:
-            detection['text'] = ''
-            detection['success'] = False
+            pass
     
     def _classify_with_resnet(self, frame: np.ndarray, detection: Dict):
         """ResNet으로 QR 코드 분류"""
@@ -1248,6 +1388,10 @@ class VideoPlayThread(QThread):
                 result = apply_gaussian_blur(result, strength)
             elif method == 'median':
                 result = apply_median_blur(result, strength)
+        
+        # 색상 반전
+        if opts.get('use_inverted', False):
+            result = apply_inverted(result)
         
         # 이진화
         if opts.get('use_threshold', False):
@@ -1656,10 +1800,21 @@ class VideoProcessorWorker(QThread):
                 else:
                     # Dynamsoft 해독 (크롭된 프레임 좌표로 해독)
                     for det in detections:
-                        # 원본 프레임에서 먼저 시도
-                        if not det.get('success', False):
-                            self._decode_qr_code(frame, det)
-                        # 실패하면 전처리 프레임에서 시도
+                        # 전처리 옵션이 활성화되어 있으면 원본 건너뛰고 전처리 프레임에서만 시도
+                        has_preprocessing = any([
+                            self.preprocessing_options.get('use_clahe', False),
+                            self.preprocessing_options.get('use_denoise', False),
+                            self.preprocessing_options.get('use_threshold', False),
+                            self.preprocessing_options.get('use_morphology', False),
+                            self.preprocessing_options.get('use_inverted', False),
+                        ])
+                        
+                        if not has_preprocessing:
+                            # 전처리 옵션이 없으면 원본 프레임에서 먼저 시도
+                            if not det.get('success', False):
+                                self._decode_qr_code(frame, det)
+                        
+                        # 전처리 프레임에서 시도
                         if not det.get('success', False):
                             self._decode_qr_code(preprocessed_frame, det)
                 
@@ -1747,6 +1902,10 @@ class VideoProcessorWorker(QThread):
                 result = apply_gaussian_blur(result, strength)
             elif method == 'median':
                 result = apply_median_blur(result, strength)
+        
+        # 색상 반전
+        if opts.get('use_inverted', False):
+            result = apply_inverted(result)
         
         # 이진화
         if opts.get('use_threshold', False):
@@ -3400,6 +3559,13 @@ class FrameAnalysisWindow(QMainWindow):
         
         preprocess_content_layout.addWidget(denoise_group)
         
+        # 색상 반전
+        inverted_group = QGroupBox("색상 반전 (Inverted)")
+        inverted_layout = QVBoxLayout(inverted_group)
+        self.inverted_check = QCheckBox("사용")
+        inverted_layout.addWidget(self.inverted_check)
+        preprocess_content_layout.addWidget(inverted_group)
+        
         # 이진화
         threshold_group = QGroupBox("이진화 (Adaptive Threshold)")
         threshold_layout = QVBoxLayout(threshold_group)
@@ -3606,6 +3772,7 @@ class FrameAnalysisWindow(QMainWindow):
             'denoise_strength': self.denoise_strength_spin.value(),
             'bilateral_sigma_color': self.bilateral_sigma_color.value(),
             'bilateral_sigma_space': self.bilateral_sigma_space.value(),
+            'use_inverted': self.inverted_check.isChecked() if hasattr(self, 'inverted_check') else False,
             'use_threshold': self.threshold_check.isChecked(),
             'threshold_block_size': block_val,
             'threshold_c': self.threshold_c_spin.value(),
@@ -3620,16 +3787,16 @@ class FrameAnalysisWindow(QMainWindow):
         """전처리 적용"""
         result = frame.copy()
         opts = self.get_preprocessing_options()
-        
+
         # 가우시안 블러
         if opts.get('use_blur', False):
             kernel_size = opts.get('blur_kernel_size', 5)
             result = apply_gaussian_blur(result, kernel_size)
-        
+
         # CLAHE
         if opts.get('use_clahe', False):
             result = apply_clahe(result, opts.get('clahe_clip_limit', 2.0), opts.get('clahe_tile_size', 8))
-        
+
         # 노이즈 제거
         if opts.get('use_denoise', False):
             method = opts.get('denoise_method', 'bilateral')
@@ -3642,15 +3809,19 @@ class FrameAnalysisWindow(QMainWindow):
                 result = apply_gaussian_blur(result, strength)
             elif method == 'median':
                 result = apply_median_blur(result, strength)
-        
+
+        # 색상 반전
+        if opts.get('use_inverted', False):
+            result = apply_inverted(result)
+
         # 이진화
         if opts.get('use_threshold', False):
             result = apply_adaptive_threshold(result, opts.get('threshold_block_size', 11), opts.get('threshold_c', 2))
-        
+
         # 형태학적 연산
         if opts.get('use_morphology', False):
             result = apply_morphology(result, opts.get('morphology_operation', 'closing'), opts.get('morphology_kernel_size', 5))
-        
+
         return result
     
     def reset_to_original(self):
@@ -3906,10 +4077,23 @@ class FrameAnalysisWindow(QMainWindow):
                     self._add_log_entry(det)
         elif self.dbr_reader and len(detections) > 0:
             for det in detections:
-                # 원본 프레임에서 먼저 시도
-                if not det.get('success', False):
-                    self._decode_qr_code(self.original_frame, det)
-                # 실패하면 전처리 프레임에서 시도
+                # 전처리 옵션이 활성화되어 있으면 원본 건너뛰고 전처리 프레임에서만 시도
+                opts = self.get_preprocessing_options()
+                has_preprocessing = any([
+                    opts.get('use_clahe', False),
+                    opts.get('use_denoise', False),
+                    opts.get('use_threshold', False),
+                    opts.get('use_morphology', False),
+                    opts.get('use_inverted', False),
+                    opts.get('use_blur', False),
+                ])
+                
+                if not has_preprocessing:
+                    # 전처리 옵션이 없으면 원본 프레임에서 먼저 시도
+                    if not det.get('success', False):
+                        self._decode_qr_code(self.original_frame, det)
+                
+                # 전처리 프레임에서 시도
                 if not det.get('success', False):
                     self._decode_qr_code(processed_frame, det)
                 
@@ -4547,6 +4731,15 @@ class QRAnalysisMainWindow(QMainWindow):
         line2.setFrameShape(QFrame.Shape.HLine)
         form.addWidget(line2)
         
+        # 색상 반전
+        self.side_inverted_check = QCheckBox("색상 반전 (Inverted)")
+        form.addWidget(self.side_inverted_check)
+        
+        # 구분선
+        line_inv = QFrame()
+        line_inv.setFrameShape(QFrame.Shape.HLine)
+        form.addWidget(line_inv)
+        
         # 3. 이진화
         self.side_threshold_check = QCheckBox("적응형 이진화")
         form.addWidget(self.side_threshold_check)
@@ -5013,7 +5206,9 @@ class QRAnalysisMainWindow(QMainWindow):
         self.side_denoise_check.setChecked(opts.get('use_denoise', False))
         self.side_denoise_method.setCurrentText(opts.get('denoise_method', 'bilateral'))
         self.side_denoise_strength_spin.setValue(opts.get('denoise_strength', 9))
-        
+
+        self.side_inverted_check.setChecked(opts.get('use_inverted', False))
+
         self.side_threshold_check.setChecked(opts.get('use_threshold', False))
         self.side_threshold_block_spin.setValue(opts.get('threshold_block_size', 11))
         self.side_threshold_c_spin.setValue(opts.get('threshold_c', 2.0))
@@ -5031,6 +5226,7 @@ class QRAnalysisMainWindow(QMainWindow):
             'use_denoise': self.side_denoise_check.isChecked(),
             'denoise_method': self.side_denoise_method.currentText(),
             'denoise_strength': self.side_denoise_strength_spin.value(),
+            'use_inverted': self.side_inverted_check.isChecked(),
             'use_threshold': self.side_threshold_check.isChecked(),
             'threshold_block_size': self.side_threshold_block_spin.value(),
             'threshold_c': self.side_threshold_c_spin.value(),
@@ -5468,7 +5664,14 @@ class QRAnalysisMainWindow(QMainWindow):
         for det in detections:
             confidence = det.get('confidence', 0.0)
             if det['success']:
-                self._add_log_entry(frame_idx, det['text'], "✅ 성공", confidence)
+                # 전처리 방식 정보 추가
+                prep_methods = det.get('preprocessing_methods', [])
+                if prep_methods:
+                    prep_info = f" [{', '.join(prep_methods)}]"
+                    status = f"✅ 성공{prep_info}"
+                else:
+                    status = "✅ 성공"
+                self._add_log_entry(frame_idx, det['text'], status, confidence)
             else:
                 self._add_log_entry(frame_idx, "인식 실패", "❌ 실패", confidence)
     
