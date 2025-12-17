@@ -17,9 +17,16 @@ except:
 
 # Get torch binary files
 torch_path = None
+torchvision_path = None
 try:
     import torch
     torch_path = Path(torch.__file__).parent
+except:
+    pass
+
+try:
+    import torchvision
+    torchvision_path = Path(torchvision.__file__).parent
 except:
     pass
 
@@ -34,13 +41,48 @@ except:
 # Collect binaries (DLL files)
 binaries = []
 if torch_path:
-    # PyTorch DLL files
-    torch_lib = torch_path / 'lib'
-    if torch_lib.exists():
-        for dll_file in torch_lib.glob('*.dll'):
-            binaries.append((str(dll_file), '.'))
-        for dll_file in torch_lib.glob('*.pyd'):
-            binaries.append((str(dll_file), '.'))
+    # PyTorch DLL files - 재귀적으로 모든 DLL/PYD 파일 찾기
+    def collect_torch_binaries(directory, target_dir='.'):
+        """재귀적으로 torch 디렉토리에서 모든 DLL/PYD 파일 수집"""
+        collected = []
+        if not directory.exists():
+            return collected
+        
+        # 현재 디렉토리의 DLL/PYD 파일
+        for dll_file in directory.glob('*.dll'):
+            collected.append((str(dll_file), target_dir))
+        for pyd_file in directory.glob('*.pyd'):
+            collected.append((str(pyd_file), target_dir))
+        
+        # 하위 디렉토리도 검색 (lib, bin 등)
+        for subdir in directory.iterdir():
+            if subdir.is_dir() and not subdir.name.startswith('__'):
+                # lib, bin 폴더는 루트에 배치
+                if subdir.name in ['lib', 'bin']:
+                    collected.extend(collect_torch_binaries(subdir, '.'))
+                else:
+                    collected.extend(collect_torch_binaries(subdir, target_dir))
+        
+        return collected
+    
+    # torch 폴더 전체에서 바이너리 수집
+    binaries.extend(collect_torch_binaries(torch_path))
+    
+    # torchvision DLL도 포함
+    if torchvision_path:
+        torchvision_binaries = collect_torch_binaries(torchvision_path)
+        binaries.extend(torchvision_binaries)
+    
+    # 중복 제거
+    seen = set()
+    unique_binaries = []
+    for item in binaries:
+        if item not in seen:
+            seen.add(item)
+            unique_binaries.append(item)
+    binaries = unique_binaries
+    
+    print(f"[Spec] Collected {len(binaries)} PyTorch binary files")
 
 # Collect datas
 datas = []
@@ -106,17 +148,24 @@ a = Analysis(
         'ultralytics.models',
         'ultralytics.models.yolo',
         'ultralytics.models.yolo.detect',
+        'ultralytics.models.yolo.detect.predict',
         'ultralytics.engine',
         'ultralytics.engine.predictor',
+        'ultralytics.engine.trainer',
         'ultralytics.utils',
         'ultralytics.utils.checks',
         'ultralytics.utils.downloads',
+        'ultralytics.utils.torch_utils',
         'ultralytics.data',
         'torch',
         'torch._C',
         'torch._dynamo',
+        'torch.nn',
+        'torch.nn.functional',
         'torchvision',
         'torchvision.models',
+        'torchvision.transforms',
+        'torchvision.transforms.functional',
         'yaml',
         'tqdm',
         'pandas',
