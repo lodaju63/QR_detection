@@ -386,6 +386,64 @@ def apply_inverted(image: np.ndarray) -> np.ndarray:
     """이미지 색상 반전 (Inverted)"""
     return cv2.bitwise_not(image)
 
+def apply_perspective_transform(roi: np.ndarray, output_size: int = 300) -> np.ndarray:
+    """투영변환: ROI 영역의 QR 코드 네 모서리를 찾아 정사각형으로 변환
+    ROI 영역에 대해 개별적으로 적용되어야 함"""
+    if roi.size == 0:
+        return roi
+    
+    if len(roi.shape) == 3:
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = roi.copy()
+    
+    # 이진화로 QR 코드 영역 찾기
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # 윤곽선 찾기
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if not contours:
+        return roi
+    
+    # 가장 큰 윤곽선 찾기
+    largest_contour = max(contours, key=cv2.contourArea)
+    
+    # 윤곽선 근사화 (4개 점 찾기)
+    epsilon = 0.02 * cv2.arcLength(largest_contour, True)
+    approx = cv2.approxPolyDP(largest_contour, epsilon, True)
+    
+    # 4개 점이 아니면 원본 반환
+    if len(approx) != 4:
+        return roi
+    
+    # 점들을 정렬 (좌상, 우상, 우하, 좌하)
+    pts = approx.reshape(4, 2)
+    rect = np.zeros((4, 2), dtype=np.float32)
+    
+    # 합과 차를 이용해 점 정렬
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]  # 좌상
+    rect[2] = pts[np.argmax(s)]  # 우하
+    
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]  # 우상
+    rect[3] = pts[np.argmax(diff)]  # 좌하
+    
+    # 목표 점들 (정사각형)
+    dst = np.array([
+        [0, 0],
+        [output_size - 1, 0],
+        [output_size - 1, output_size - 1],
+        [0, output_size - 1]
+    ], dtype=np.float32)
+    
+    # 투영변환 행렬 계산 및 적용
+    M = cv2.getPerspectiveTransform(rect, dst)
+    warped = cv2.warpPerspective(roi, M, (output_size, output_size))
+    
+    return warped
+
 
 # ============================================================================
 # 전처리 옵션 다이얼로그
@@ -417,6 +475,8 @@ class PreprocessingDialog(QDialog):
                 'morphology_operation': 'closing',
                 'morphology_kernel_size': 5,
                 'use_inverted': False,
+                'use_perspective': False,
+                'perspective_size': 300,
             }
         
         self.init_ui()
@@ -543,7 +603,33 @@ class PreprocessingDialog(QDialog):
         line3.setFrameShape(QFrame.Shape.HLine)
         form.addRow(line3)
         
-        # 4. 형태학적 연산
+        # 5. 투영변환
+        self.perspective_check = QCheckBox("투영변환 (Perspective Transform)")
+        self.perspective_check.setChecked(self.options.get('use_perspective', False))
+        
+        self.perspective_size = QSlider(Qt.Orientation.Horizontal)
+        self.perspective_size.setRange(200, 500)
+        self.perspective_size.setValue(self.options.get('perspective_size', 300))
+        self.perspective_size.setSingleStep(50)
+        self.perspective_size.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.perspective_size_label = QLabel(str(self.options.get('perspective_size', 300)))
+        self.perspective_size.valueChanged.connect(lambda v: self.perspective_size_label.setText(str(v)))
+        
+        perspective_layout = QVBoxLayout()
+        perspective_layout.addWidget(self.perspective_check)
+        size_layout = QHBoxLayout()
+        size_layout.addWidget(QLabel("출력 크기:"))
+        size_layout.addWidget(self.perspective_size)
+        size_layout.addWidget(self.perspective_size_label)
+        perspective_layout.addLayout(size_layout)
+        form.addRow("", perspective_layout)
+        
+        # 구분선
+        line4 = QFrame()
+        line4.setFrameShape(QFrame.Shape.HLine)
+        form.addRow(line4)
+        
+        # 6. 형태학적 연산
         self.morphology_check = QCheckBox("형태학적 연산")
         self.morphology_check.setChecked(self.options.get('use_morphology', False))
         
@@ -632,6 +718,8 @@ class PreprocessingDialog(QDialog):
             'use_morphology': self.morphology_check.isChecked(),
             'morphology_operation': self.morphology_operation.currentText(),
             'morphology_kernel_size': morph_val,
+            'use_perspective': self.perspective_check.isChecked(),
+            'perspective_size': self.perspective_size.value(),
         }
 
 
@@ -884,6 +972,8 @@ class AnalysisWorker(QThread):
         if opts.get('use_morphology', False):
             result = apply_morphology(result, opts.get('morphology_operation', 'closing'), opts.get('morphology_kernel_size', 5))
         
+        # 투영변환은 전처리 파이프라인에서 제거하고, 각 QR 코드 해독 시 개별적으로 적용
+        
         return result
     
     def _create_preprocessing_variants(self, frame: np.ndarray) -> dict:
@@ -924,6 +1014,8 @@ class AnalysisWorker(QThread):
         if opts.get('use_morphology', False):
             active_preps_no_inv.append('형태학적연산')
             prep_functions['형태학적연산'] = lambda f: apply_morphology(f, opts.get('morphology_operation', 'closing'), opts.get('morphology_kernel_size', 5))
+        
+        # 투영변환은 전처리 변형에서 제외 (각 QR 코드 해독 시 개별 적용)
         
         use_inverted = opts.get('use_inverted', False)
         
@@ -1061,6 +1153,11 @@ class AnalysisWorker(QThread):
             
             if roi.size == 0:
                 return
+            
+            # 투영변환 옵션이 활성화되어 있으면 ROI에 개별적으로 적용
+            if self.preprocessing_options.get('use_perspective', False):
+                perspective_size = self.preprocessing_options.get('perspective_size', 300)
+                roi = apply_perspective_transform(roi, perspective_size)
             
             # RGB 변환
             if len(roi.shape) == 3 and roi.shape[2] == 3:
@@ -1400,6 +1497,8 @@ class VideoPlayThread(QThread):
         # 형태학적 연산
         if opts.get('use_morphology', False):
             result = apply_morphology(result, opts.get('morphology_operation', 'closing'), opts.get('morphology_kernel_size', 5))
+        
+        # 투영변환은 전처리 파이프라인에서 제거하고, 각 QR 코드 해독 시 개별적으로 적용
         
         return result
         
@@ -1915,6 +2014,8 @@ class VideoProcessorWorker(QThread):
         if opts.get('use_morphology', False):
             result = apply_morphology(result, opts.get('morphology_operation', 'closing'), opts.get('morphology_kernel_size', 5))
         
+        # 투영변환은 전처리 파이프라인에서 제거하고, 각 QR 코드 해독 시 개별적으로 적용
+        
         return result
             
     def _detect_qr_codes(self, frame: np.ndarray) -> List[Dict]:
@@ -2068,6 +2169,11 @@ class VideoProcessorWorker(QThread):
             
             if roi.size == 0:
                 return
+            
+            # 투영변환 옵션이 활성화되어 있으면 ROI에 개별적으로 적용
+            if self.preprocessing_options.get('use_perspective', False):
+                perspective_size = self.preprocessing_options.get('perspective_size', 300)
+                roi = apply_perspective_transform(roi, perspective_size)
             
             # RGB 변환
             if len(roi.shape) == 3 and roi.shape[2] == 3:
@@ -3632,6 +3738,23 @@ class FrameAnalysisWindow(QMainWindow):
         
         preprocess_content_layout.addWidget(blur_group)
         
+        # 투영변환
+        perspective_group = QGroupBox("투영변환 (Perspective Transform)")
+        perspective_layout = QVBoxLayout(perspective_group)
+        self.perspective_check = QCheckBox("사용")
+        perspective_layout.addWidget(self.perspective_check)
+        
+        perspective_size_layout = QHBoxLayout()
+        perspective_size_layout.addWidget(QLabel("출력 크기:"))
+        self.perspective_size_spin = QSpinBox()
+        self.perspective_size_spin.setRange(200, 500)
+        self.perspective_size_spin.setSingleStep(50)
+        self.perspective_size_spin.setValue(300)
+        perspective_size_layout.addWidget(self.perspective_size_spin)
+        perspective_layout.addLayout(perspective_size_layout)
+        
+        preprocess_content_layout.addWidget(perspective_group)
+        
         preprocess_content_layout.addStretch()
         preprocess_scroll.setWidget(preprocess_content)
         preprocess_layout.addWidget(preprocess_scroll)
@@ -3781,6 +3904,8 @@ class FrameAnalysisWindow(QMainWindow):
             'morphology_kernel_size': morph_val,
             'use_blur': self.blur_check.isChecked(),
             'blur_kernel_size': blur_val,
+            'use_perspective': self.perspective_check.isChecked() if hasattr(self, 'perspective_check') else False,
+            'perspective_size': self.perspective_size_spin.value() if hasattr(self, 'perspective_size_spin') else 300,
         }
     
     def apply_preprocessing(self, frame: np.ndarray) -> np.ndarray:
@@ -3821,6 +3946,8 @@ class FrameAnalysisWindow(QMainWindow):
         # 형태학적 연산
         if opts.get('use_morphology', False):
             result = apply_morphology(result, opts.get('morphology_operation', 'closing'), opts.get('morphology_kernel_size', 5))
+
+        # 투영변환은 전처리 파이프라인에서 제거하고, 각 QR 코드 해독 시 개별적으로 적용
 
         return result
     
@@ -3953,6 +4080,12 @@ class FrameAnalysisWindow(QMainWindow):
             
             if roi.size == 0:
                 return
+            
+            # 투영변환 옵션이 활성화되어 있으면 ROI에 개별적으로 적용
+            opts = self.get_preprocessing_options()
+            if opts.get('use_perspective', False):
+                perspective_size = opts.get('perspective_size', 300)
+                roi = apply_perspective_transform(roi, perspective_size)
             
             # RGB 변환
             if len(roi.shape) == 3 and roi.shape[2] == 3:
@@ -4827,6 +4960,34 @@ class QRAnalysisMainWindow(QMainWindow):
         kernel_layout.addWidget(self.side_morphology_kernel_spin)
         form.addLayout(kernel_layout)
         
+        # 구분선
+        line4 = QFrame()
+        line4.setFrameShape(QFrame.Shape.HLine)
+        form.addWidget(line4)
+        
+        # 5. 투영변환
+        self.side_perspective_check = QCheckBox("투영변환 (Perspective Transform)")
+        form.addWidget(self.side_perspective_check)
+        
+        # 출력 크기 (정수 입력)
+        form.addWidget(QLabel("출력 크기:"))
+        perspective_size_layout = QHBoxLayout()
+        self.side_perspective_size = QSlider(Qt.Orientation.Horizontal)
+        self.side_perspective_size.setRange(200, 500)
+        self.side_perspective_size.setValue(300)
+        self.side_perspective_size.setSingleStep(50)
+        self.side_perspective_size_spin = QSpinBox()
+        self.side_perspective_size_spin.setRange(200, 500)
+        self.side_perspective_size_spin.setSingleStep(50)
+        self.side_perspective_size_spin.setValue(300)
+        self.side_perspective_size_spin.setMaximumWidth(80)
+        # 양방향 연동
+        self.side_perspective_size.valueChanged.connect(self.side_perspective_size_spin.setValue)
+        self.side_perspective_size_spin.valueChanged.connect(self.side_perspective_size.setValue)
+        perspective_size_layout.addWidget(self.side_perspective_size)
+        perspective_size_layout.addWidget(self.side_perspective_size_spin)
+        form.addLayout(perspective_size_layout)
+        
         form.addStretch()
         
         scroll.setWidget(scroll_content)
@@ -5216,6 +5377,9 @@ class QRAnalysisMainWindow(QMainWindow):
         self.side_morphology_check.setChecked(opts.get('use_morphology', False))
         self.side_morphology_operation.setCurrentText(opts.get('morphology_operation', 'closing'))
         self.side_morphology_kernel_spin.setValue(opts.get('morphology_kernel_size', 5))
+        
+        self.side_perspective_check.setChecked(opts.get('use_perspective', False))
+        self.side_perspective_size_spin.setValue(opts.get('perspective_size', 300))
     
     def apply_sidebar_preprocessing(self):
         """사이드바 전처리 옵션 적용"""
@@ -5233,6 +5397,8 @@ class QRAnalysisMainWindow(QMainWindow):
             'use_morphology': self.side_morphology_check.isChecked(),
             'morphology_operation': self.side_morphology_operation.currentText(),
             'morphology_kernel_size': self.side_morphology_kernel_spin.value(),
+            'use_perspective': self.side_perspective_check.isChecked(),
+            'perspective_size': self.side_perspective_size_spin.value(),
         }
         
         QMessageBox.information(self, "성공", "전처리 옵션이 적용되었습니다!")
